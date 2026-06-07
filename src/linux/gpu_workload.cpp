@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cstdio>
 #include <filesystem>
 #include <fmt/format.h>
@@ -117,6 +118,152 @@ namespace Gpu::Workload {
 		if (std::regex_search(blob, video)) return "Video";
 		if (std::regex_search(blob, embed)) return "Embed";
 		if (std::regex_search(blob, diffusion)) return "Image";
+		return "";
+	}
+
+	struct ollama_running {
+		string name;
+		long long size_vram = 0;
+	};
+
+	vector<ollama_running> parse_ollama_ps_json(const string& json) {
+		vector<ollama_running> models;
+		size_t pos = 0;
+		while ((pos = json.find("\"name\"", pos)) != string::npos) {
+			pos += 6;
+			const auto q1 = json.find('"', pos);
+			if (q1 == string::npos) break;
+			const auto q2 = json.find('"', q1 + 1);
+			if (q2 == string::npos) break;
+			const string name = json.substr(q1 + 1, q2 - q1 - 1);
+
+			long long size_vram = 0;
+			if (const auto vpos = json.find("\"size_vram\"", q2); vpos != string::npos and vpos < q2 + 512) {
+				const auto num_start = json.find_first_of("0123456789", vpos);
+				if (num_start != string::npos) {
+					try { size_vram = std::stoll(json.substr(num_start)); } catch (...) {}
+				}
+			}
+
+			if (not name.empty()) {
+				bool duplicate = false;
+				for (const auto& existing : models) {
+					if (existing.name == name) {
+						duplicate = true;
+						break;
+					}
+				}
+				if (not duplicate)
+					models.push_back({name, size_vram});
+			}
+			pos = q2 + 1;
+		}
+		return models;
+	}
+
+	vector<ollama_running> collect_ollama_running() {
+		vector<ollama_running> models;
+		string out;
+
+		if (run_command("curl -sf --max-time 2 http://127.0.0.1:11434/api/ps 2>/dev/null", out)) {
+			models = parse_ollama_ps_json(out);
+			if (not models.empty()) return models;
+		}
+
+		if (run_command("docker ps --format '{{.Names}}' 2>/dev/null", out)) {
+			for (auto& cname : ssplit(out, '\n')) {
+				cname = trim(cname);
+				if (cname.empty() or (not cname.contains("ollama") and cname != "ollama"))
+					continue;
+				string api_out;
+				if (run_command(
+					"docker exec " + cname + " curl -sf --max-time 2 http://127.0.0.1:11434/api/ps 2>/dev/null",
+					api_out
+				)) {
+					models = parse_ollama_ps_json(api_out);
+					if (not models.empty()) return models;
+				}
+			}
+		}
+
+		auto parse_ollama_ps_text = [](const string& text) {
+			vector<ollama_running> parsed;
+			for (auto& line : ssplit(text, '\n')) {
+				line = trim(line);
+				if (line.empty() or line.starts_with("NAME"))
+					continue;
+				const auto parts = ssplit(line, ' ');
+				if (not parts.empty())
+					parsed.push_back({string(parts[0]), 0});
+			}
+			return parsed;
+		};
+
+		if (run_command("docker exec ollama ollama ps 2>/dev/null", out))
+			return parse_ollama_ps_text(out);
+		if (run_command("ollama ps 2>/dev/null", out))
+			return parse_ollama_ps_text(out);
+
+		return models;
+	}
+
+	string match_ollama_model(const long long vram_bytes, const vector<ollama_running>& models) {
+		if (models.empty()) return "";
+		if (models.size() == 1) return models[0].name;
+
+		if (vram_bytes > 0) {
+			long long best_diff = LLONG_MAX;
+			string best;
+			for (const auto& m : models) {
+				if (m.size_vram <= 0) continue;
+				const long long diff = llabs(m.size_vram - vram_bytes);
+				if (diff < best_diff) {
+					best_diff = diff;
+					best = m.name;
+				}
+			}
+			if (not best.empty() and best_diff <= vram_bytes / 5 + 256LL * 1024 * 1024)
+				return best;
+		}
+
+		for (const auto& m : models)
+			if (not m.name.empty()) return m.name;
+		return "";
+	}
+
+	string resolve_llm_model(
+		const string& proc_name,
+		const string& cmd,
+		const long long vram_bytes,
+		const vector<ollama_running>& ollama_models
+	) {
+		static const std::regex served_model(R"(--served-model-name\s+(\S+))", std::regex::icase);
+		static const std::regex model_path(R"((?:--model-path|--model|-m)\s+(\S+))", std::regex::icase);
+		static const std::regex model_id(R"(--model-id\s+(\S+))", std::regex::icase);
+		static const std::regex model_name_re(
+			R"((qwen[\w.:-]+|llama[\w.:-]+|mistral[\w.:-]+|gemma[\w.:-]+|phi[\w.:-]+|deepseek[\w.:-]+|codellama[\w.:-]+|moondream[\w.:-]+))",
+			std::regex::icase
+		);
+
+		if (std::smatch m; std::regex_search(cmd, m, served_model))
+			return m[1].str();
+		if (std::smatch m; std::regex_search(cmd, m, model_id))
+			return basename_of(m[1].str());
+
+		if (std::smatch m; std::regex_search(cmd, m, model_path)) {
+			const auto path = m[1].str();
+			if (not path.contains("/blobs/") and not path.contains("sha256-"))
+				return basename_of(path);
+		}
+
+		if (proc_name.contains("llama-server") or proc_name.contains("ollama") or cmd.contains("/ollama/")) {
+			if (const auto ollama = match_ollama_model(vram_bytes, ollama_models); not ollama.empty())
+				return ollama;
+		}
+
+		if (std::smatch m; std::regex_search(cmd, m, model_name_re))
+			return m[1].str();
+
 		return "";
 	}
 
@@ -262,6 +409,7 @@ namespace Gpu::Workload {
 
 		const auto pmon = collect_pmon();
 		const auto docker_names = docker_name_map();
+		const auto ollama_running = collect_ollama_running();
 
 		string out;
 		if (not run_command(
@@ -294,6 +442,11 @@ namespace Gpu::Workload {
 			e.label = infer_label(e.process_name, cmd);
 			const auto container = container_for_pid(e.pid, docker_names);
 			e.category = classify_category(e.process_name, cmd + " " + container);
+			if (e.category == "LLM" or e.process_name.contains("llama-server") or e.process_name.contains("vllm")) {
+				if (const auto model = resolve_llm_model(e.process_name, cmd, e.vram_bytes, ollama_running);
+					not model.empty())
+					e.label = model;
+			}
 			e.detail = build_detail(e.label, e.process_name, cmd, container);
 			if (pmon.contains(e.pid))
 				e.sm_util = pmon.at(e.pid);
@@ -363,7 +516,7 @@ namespace Gpu::Workload {
 
 		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
 			if (not by_gpu.contains(gpu)) {
-				rows.push_back({.gpu = gpu, .show_gpu = true, .idle = true, .detail = "(idle)"});
+				rows.push_back({.gpu = gpu, .show_gpu = true, .idle = true, .category = "", .detail = "(idle)"});
 				continue;
 			}
 
