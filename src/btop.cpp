@@ -1038,22 +1038,28 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	}
 
 	if (not Config::set_boxes(Config::getS("shown_boxes"))) {
-		Config::set_boxes("cpu mem proc");
-		Config::set("shown_boxes", "cpu mem proc"s);
+		Config::set_boxes("cpu");
+		Config::set("shown_boxes", "cpu"s);
 	}
 
-#ifdef GPU_SUPPORT
-	// GPU-first default on fresh config: show all detected GPUs + compact system view
-	if (Config::write_new and Gpu::count > 0) {
-		string gpu_boxes;
-		for (int i = 0; i < Gpu::count; ++i)
-			gpu_boxes += fmt::format("gpu{} ", i);
-		gpu_boxes += "cpu mem proc";
-		if (Config::set_boxes(gpu_boxes)) {
-			Config::set("shown_boxes", gpu_boxes);
+	// GPU-first default on fresh config: GPUs only (no mem/disks or proc list)
+	if (Config::write_new) {
+	#ifdef GPU_SUPPORT
+		if (Gpu::count > 0) {
+			string gpu_boxes;
+			for (int i = 0; i < Gpu::count; ++i)
+				gpu_boxes += fmt::format("gpu{} ", i);
+			if (not gpu_boxes.empty()) gpu_boxes.pop_back();
+			if (Config::set_boxes(gpu_boxes)) {
+				Config::set("shown_boxes", gpu_boxes);
+			}
+		} else
+	#endif
+		{
+			Config::set_boxes("cpu");
+			Config::set("shown_boxes", "cpu"s);
 		}
 	}
-#endif
 
 	//? Update list of available themes and generate the selected theme
 	Theme::updateThemes();

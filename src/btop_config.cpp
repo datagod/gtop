@@ -254,7 +254,7 @@ namespace Config {
 
 	std::unordered_map<std::string_view, string> strings = {
 		{"color_theme", "Default"},
-		{"shown_boxes", "cpu mem proc"},
+		{"shown_boxes", "cpu"},
 		{"graph_symbol", "braille"},
 		{"disable_presets", "Off"},
 		{"presets", "cpu:1:default,proc:0:default cpu:0:default,mem:0:default cpu:0:block,proc:0:default"},

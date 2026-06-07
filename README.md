@@ -25,9 +25,8 @@ Requires GCC 14+ or Clang 19+ on Linux. GPU monitoring needs dynamic linking
 
 ## GPU-first layout
 
-On first run (no existing config), gtop++ shows all detected GPU boxes plus a
-compact CPU, memory, and process view. Press `p` to cycle presets; use the menu
-to toggle boxes.
+On first run (no existing config), gtop++ shows only detected GPU boxes (no disk
+or process list). Press `2`/`4` to toggle memory or processes, or `p` for presets.
 
 ## Upstream
 
