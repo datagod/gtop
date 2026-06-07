@@ -99,7 +99,7 @@ namespace Gpu::Workload {
 			const auto comma = line.find(',');
 			if (comma == string::npos) continue;
 			try {
-				map[line.substr(comma + 1)] = std::stoi(string(trim(line.substr(0, comma))));
+				map[string(trim(line.substr(comma + 1)))] = std::stoi(string(trim(line.substr(0, comma))));
 			} catch (...) {}
 		}
 		return map;
@@ -126,7 +126,7 @@ namespace Gpu::Workload {
 	} // namespace
 
 	void collect(const bool no_update) {
-		if (no_update) return;
+		(void)no_update;
 
 		entries.clear();
 		if (not Config::getB("show_gpu_workloads") or Gpu::count < 1)
@@ -151,7 +151,7 @@ namespace Gpu::Workload {
 			const auto parts = ssplit(line, ',');
 			if (parts.size() < 4) continue;
 
-			const auto& uuid = parts[0];
+			const string uuid = string(trim(parts[0]));
 			if (not uuid_map.contains(uuid)) continue;
 
 			gpu_proc_entry e;
