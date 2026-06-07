@@ -153,6 +153,8 @@ namespace Gpu {
 		unsigned int pid = 0;
 		string process_name;
 		string label;
+		string category;
+		string detail;
 		long long vram_bytes = 0;
 		int sm_util = -1;
 	};

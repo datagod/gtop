@@ -56,21 +56,31 @@ namespace Gpu::Workload {
 		return string(trim(cmd));
 	}
 
+	string basename_of(const string& path) {
+		if (auto slash = path.find_last_of('/'); slash != string::npos)
+			return path.substr(slash + 1);
+		return path;
+	}
+
 	string infer_label(const string& proc_name, const string& cmd) {
-		static const std::regex model_flag(R"(--model\s+(\S+))", std::regex::icase);
+		static const std::regex model_flag(R"((?:--model|-m)\s+(\S+))", std::regex::icase);
 		static const std::regex model_name(
-			R"((qwen[\w.:-]+|llama[\w.:-]+|mistral[\w.:-]+|gemma[\w.:-]+|phi[\w.:-]+|deepseek[\w.:-]+))",
+			R"((qwen[\w.:-]+|llama[\w.:-]+|mistral[\w.:-]+|gemma[\w.:-]+|phi[\w.:-]+|deepseek[\w.:-]+|codellama[\w.:-]+))",
 			std::regex::icase
 		);
+		static const std::regex ollama_model(R"((?:OLLAMA_MODEL|MODEL)=([^\s]+))", std::regex::icase);
 
 		if (std::smatch m; std::regex_search(cmd, m, model_flag)) {
 			auto path = m[1].str();
-			if (auto slash = path.find_last_of('/'); slash != string::npos)
-				path = path.substr(slash + 1);
-			return path.size() > 36 ? path.substr(0, 36) : path;
+			if (path.contains("/blobs/") or path.contains("sha256-"))
+				return "ollama model";
+			path = basename_of(path);
+			return path.size() > 48 ? path.substr(0, 48) : path;
 		}
 		if (std::smatch m; std::regex_search(cmd, m, model_name))
 			return m[1].str();
+		if (std::smatch m; std::regex_search(cmd, m, ollama_model))
+			return basename_of(m[1].str());
 
 		if (proc_name.contains("llama-server"))
 			return "llama-server";
@@ -78,12 +88,132 @@ namespace Gpu::Workload {
 			return "ollama";
 		if (proc_name.contains("vllm"))
 			return "vllm";
+		if (proc_name.contains("frigate"))
+			return basename_of(proc_name);
 		if (proc_name.contains("python") and (cmd.contains("chatterbox") or cmd.contains("tts")))
 			return "TTS";
 		if (cmd.contains("ffmpeg") or cmd.contains("nvenc"))
 			return "video";
 
-		return proc_name.empty() ? "unknown" : proc_name;
+		const auto base = basename_of(proc_name);
+		return base.empty() ? "unknown" : base;
+	}
+
+	string classify_category(const string& proc_name, const string& cmd) {
+		const string blob = proc_name + " " + cmd;
+		static const std::regex llm(
+			R"(llama-server|llama\.cpp|vllm|text-generation|ollama|exllama|sglang|tritonserver)",
+			std::regex::icase
+		);
+		static const std::regex tts(R"(chatterbox|tts|bark|piper|coqui)", std::regex::icase);
+		static const std::regex vision(R"(frigate|yolo|detect|embeddings|onnxruntime|tensorrt)", std::regex::icase);
+		static const std::regex video(R"(ffmpeg|gstreamer|nvenc|nvdec)", std::regex::icase);
+		static const std::regex embed(R"(embed|sentence-transformers|tei)", std::regex::icase);
+		static const std::regex diffusion(R"(comfyui|stable.?diff|diffusers)", std::regex::icase);
+
+		if (std::regex_search(blob, llm)) return "LLM";
+		if (std::regex_search(blob, tts)) return "TTS";
+		if (std::regex_search(blob, vision)) return "Vision";
+		if (std::regex_search(blob, video)) return "Video";
+		if (std::regex_search(blob, embed)) return "Embed";
+		if (std::regex_search(blob, diffusion)) return "Image";
+		return "";
+	}
+
+	string cmd_context(const string& cmd) {
+		if (cmd.empty()) return "";
+
+		static const std::regex py_script(R"(\bpython\d*(?:\.\d+)?\s+(\S+))", std::regex::icase);
+		if (std::smatch m; std::regex_search(cmd, m, py_script))
+			return basename_of(m[1].str());
+
+		static const std::regex serve_arg(R"(serve\s+(\S+))", std::regex::icase);
+		if (std::smatch m; std::regex_search(cmd, m, serve_arg))
+			return basename_of(m[1].str());
+
+		if (cmd.contains("ffmpeg")) {
+			static const std::regex stream(R"(-i\s+(\S+))");
+			if (std::smatch m; std::regex_search(cmd, m, stream))
+				return "stream " + basename_of(m[1].str());
+			return "ffmpeg transcode";
+		}
+
+		return "";
+	}
+
+	std::unordered_map<string, string> docker_name_map() {
+		std::unordered_map<string, string> map;
+		string out;
+		if (not run_command("docker ps --format '{{.ID}}\t{{.Names}}' 2>/dev/null", out))
+			return map;
+
+		for (auto& line : ssplit(out, '\n')) {
+			line = trim(line);
+			if (line.empty()) continue;
+			const auto tab = line.find('\t');
+			if (tab == string::npos) continue;
+			const auto id = line.substr(0, tab);
+			const auto name = line.substr(tab + 1);
+			map[id] = name;
+			if (id.size() >= 12)
+				map[id.substr(0, 12)] = name;
+		}
+		return map;
+	}
+
+	string container_for_pid(const unsigned int pid, const std::unordered_map<string, string>& docker_names) {
+		const auto cgroup = readfile(fs::path("/proc") / std::to_string(pid) / "cgroup");
+		if (cgroup.empty()) return "";
+
+		static const std::regex docker_scope(R"(docker[/-]([a-f0-9]{12,64}))", std::regex::icase);
+		if (std::smatch m; std::regex_search(cgroup, m, docker_scope)) {
+			const auto& id = m[1].str();
+			if (docker_names.contains(id))
+				return docker_names.at(id);
+			if (id.size() >= 12 and docker_names.contains(id.substr(0, 12)))
+				return docker_names.at(id.substr(0, 12));
+		}
+		return "";
+	}
+
+	string build_detail(
+		const string& label,
+		const string& category,
+		const string& proc_name,
+		const string& cmd,
+		const string& container
+	) {
+		string line;
+		if (not category.empty())
+			line = '[' + category + "] ";
+
+		line += label;
+
+		vector<string> parts;
+		if (not container.empty())
+			parts.push_back("docker:" + container);
+
+		const auto proc_base = basename_of(proc_name);
+		if (not proc_base.empty() and proc_base != label and not label.contains(proc_base))
+			parts.push_back(proc_base);
+
+		const auto ctx = cmd_context(cmd);
+		if (not ctx.empty() and ctx != label and not v_contains(parts, ctx))
+			parts.push_back(ctx);
+
+		if (parts.empty() and not cmd.empty() and cmd != proc_name) {
+			auto snippet = cmd;
+			if (snippet.size() > 72)
+				snippet = snippet.substr(0, 69) + "...";
+			if (snippet != label)
+				parts.push_back(snippet);
+		}
+
+		for (size_t i = 0; i < parts.size(); ++i) {
+			line += (i == 0 ? " · " : " · ") + parts[i];
+		}
+
+		return line;
 	}
 
 	std::unordered_map<string, int> gpu_uuid_map() {
@@ -136,6 +266,7 @@ namespace Gpu::Workload {
 		if (uuid_map.empty()) return;
 
 		const auto pmon = collect_pmon();
+		const auto docker_names = docker_name_map();
 
 		string out;
 		if (not run_command(
@@ -166,6 +297,15 @@ namespace Gpu::Workload {
 
 			const auto cmd = get_cmdline(e.pid);
 			e.label = infer_label(e.process_name, cmd);
+			const auto container = container_for_pid(e.pid, docker_names);
+			e.category = classify_category(e.process_name, cmd + " " + container);
+			e.detail = build_detail(
+				e.label,
+				e.category,
+				e.process_name,
+				cmd,
+				container
+			);
 			if (pmon.contains(e.pid))
 				e.sm_util = pmon.at(e.pid);
 
@@ -199,17 +339,16 @@ namespace Gpu::Workload {
 		string out;
 		out.reserve(width * height);
 
-		const int label_w = std::max(12, width - 34);
+		const int detail_w = std::max(24, width - 20);
 		const int max_rows = std::max(0, height - 3);
 
 		if (redraw) {
 			out += box;
 			out += Mv::to(y + 1, x + 1) + Theme::c("title") + Fx::b
 				+ Theme::c("hi_fg") + ljust("GPU", 4) + Theme::c("title") + ' '
-				+ ljust("Model / process", label_w) + ' '
+				+ ljust("Model / workload", detail_w) + ' '
 				+ rjust("VRAM", 7) + ' '
-				+ rjust("SM%", 4) + ' '
-				+ rjust("PID", 7)
+				+ rjust("SM%", 4)
 				+ Fx::ub;
 		}
 
@@ -221,10 +360,9 @@ namespace Gpu::Workload {
 			int gpu = -1;
 			bool show_gpu = false;
 			bool idle = false;
-			string label;
+			string detail;
 			long long vram_bytes = 0;
 			int sm_util = -1;
-			unsigned int pid = 0;
 		};
 		vector<wl_row> rows;
 		rows.reserve(entries.size() + Gpu::count);
@@ -233,7 +371,7 @@ namespace Gpu::Workload {
 
 		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
 			if (not by_gpu.contains(gpu)) {
-				rows.push_back({.gpu = gpu, .show_gpu = true, .idle = true, .label = "(idle)"});
+				rows.push_back({.gpu = gpu, .show_gpu = true, .idle = true, .detail = "(idle)"});
 				continue;
 			}
 
@@ -249,10 +387,9 @@ namespace Gpu::Workload {
 				rows.push_back({
 					.gpu = gpu,
 					.show_gpu = first,
-					.label = e->label,
+					.detail = e->detail,
 					.vram_bytes = e->vram_bytes,
-					.sm_util = e->sm_util,
-					.pid = e->pid
+					.sm_util = e->sm_util
 				});
 				first = false;
 			}
@@ -275,26 +412,26 @@ namespace Gpu::Workload {
 				out += Theme::c("hi_fg") + Fx::b
 					+ ljust("GPU" + to_string(line.gpu), 4) + Fx::ub
 					+ Theme::c("inactive_fg") + ' '
-					+ ljust(line.label, label_w) + ' '
+					+ ljust(line.detail, detail_w) + ' '
 					+ rjust("-", 7) + ' '
-					+ rjust("-", 4) + ' '
-					+ rjust("-", 7);
+					+ rjust("-", 4);
 				continue;
 			}
 
 			const string gpu_col = line.show_gpu ? ljust("GPU" + to_string(line.gpu), 4) : ljust("", 4);
-			const string label = uresize(line.label, label_w);
+			const string detail = uresize(line.detail, detail_w);
 			const string vram = floating_humanizer(line.vram_bytes);
 			const int vram_pct = static_cast<int>(std::clamp(line.vram_bytes * 100 / max_vram, 0LL, 100LL));
 			const string sm = line.sm_util >= 0 ? to_string(line.sm_util) + '%' : "-";
 
-			out += Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub
-				+ Theme::c("title") + Fx::b + ' ' + ljust(label, label_w) + Fx::ub + ' '
+			const bool tagged = detail.starts_with('[');
+			out += Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub + ' '
+				+ (tagged ? Theme::c("proc_misc") + Fx::b : Theme::c("title") + Fx::b)
+				+ ljust(detail, detail_w) + Fx::ub + ' '
 				+ Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, 7) + Fx::ub + ' '
 				+ (line.sm_util >= 0
 					? Theme::g("cpu").at(std::clamp(line.sm_util, 0, 100)) + Fx::b + rjust(sm, 4) + Fx::ub
-					: Theme::c("inactive_fg") + rjust(sm, 4))
-				+ Theme::c("proc_misc") + Fx::b + rjust(to_string(line.pid), 7) + Fx::ub;
+					: Theme::c("inactive_fg") + rjust(sm, 4));
 		}
 
 		redraw = false;
