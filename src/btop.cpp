@@ -1005,7 +1005,7 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 
 	//? Initialize terminal and set options
 	if (not Term::init()) {
-		Global::exit_error_msg = "No tty detected!\nbtop++ needs an interactive shell to run.";
+		Global::exit_error_msg = "No tty detected!\ngtop++ needs an interactive shell to run.";
 		clean_quit(1);
 	}
 
@@ -1042,9 +1042,9 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 		Config::set("shown_boxes", "cpu"s);
 	}
 
-	// GPU-first default on fresh config: GPUs only (no mem/disks or proc list)
-	if (Config::write_new) {
-	#ifdef GPU_SUPPORT
+#ifdef GPU_SUPPORT
+	// GPU-first layout: GPUs only until user sets gpu_first_layout=false in config
+	if (Config::getB("gpu_first_layout")) {
 		if (Gpu::count > 0) {
 			string gpu_boxes;
 			for (int i = 0; i < Gpu::count; ++i)
@@ -1053,13 +1053,12 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 			if (Config::set_boxes(gpu_boxes)) {
 				Config::set("shown_boxes", gpu_boxes);
 			}
-		} else
-	#endif
-		{
+		} else {
 			Config::set_boxes("cpu");
 			Config::set("shown_boxes", "cpu"s);
 		}
 	}
+#endif
 
 	//? Update list of available themes and generate the selected theme
 	Theme::updateThemes();
