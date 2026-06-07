@@ -178,16 +178,11 @@ namespace Gpu::Workload {
 
 	string build_detail(
 		const string& label,
-		const string& category,
 		const string& proc_name,
 		const string& cmd,
 		const string& container
 	) {
-		string line;
-		if (not category.empty())
-			line = '[' + category + "] ";
-
-		line += label;
+		string line = label;
 
 		vector<string> parts;
 		if (not container.empty())
@@ -299,13 +294,7 @@ namespace Gpu::Workload {
 			e.label = infer_label(e.process_name, cmd);
 			const auto container = container_for_pid(e.pid, docker_names);
 			e.category = classify_category(e.process_name, cmd + " " + container);
-			e.detail = build_detail(
-				e.label,
-				e.category,
-				e.process_name,
-				cmd,
-				container
-			);
+			e.detail = build_detail(e.label, e.process_name, cmd, container);
 			if (pmon.contains(e.pid))
 				e.sm_util = pmon.at(e.pid);
 
@@ -339,14 +328,16 @@ namespace Gpu::Workload {
 		string out;
 		out.reserve(width * height);
 
-		const int detail_w = std::max(24, width - 20);
+		constexpr int cat_w = 8;
+		const int detail_w = std::max(16, width - 29);
 		const int max_rows = std::max(0, height - 3);
 
 		if (redraw) {
 			out += box;
 			out += Mv::to(y + 1, x + 1) + Theme::c("title") + Fx::b
 				+ Theme::c("hi_fg") + ljust("GPU", 4) + Theme::c("title") + ' '
-				+ ljust("Model / workload", detail_w) + ' '
+				+ ljust("Type", cat_w) + ' '
+				+ ljust("Workload", detail_w) + ' '
 				+ rjust("VRAM", 7) + ' '
 				+ rjust("SM%", 4)
 				+ Fx::ub;
@@ -360,6 +351,7 @@ namespace Gpu::Workload {
 			int gpu = -1;
 			bool show_gpu = false;
 			bool idle = false;
+			string category;
 			string detail;
 			long long vram_bytes = 0;
 			int sm_util = -1;
@@ -387,6 +379,7 @@ namespace Gpu::Workload {
 				rows.push_back({
 					.gpu = gpu,
 					.show_gpu = first,
+					.category = e->category,
 					.detail = e->detail,
 					.vram_bytes = e->vram_bytes,
 					.sm_util = e->sm_util
@@ -408,10 +401,15 @@ namespace Gpu::Workload {
 		for (const auto& line : rows) {
 			out += Mv::to(y + row++, x + 1);
 
+			const auto category_col = [&](const string& category) {
+				return category.empty() ? ljust("-", cat_w) : ljust('[' + category + ']', cat_w);
+			};
+
 			if (line.idle) {
 				out += Theme::c("hi_fg") + Fx::b
 					+ ljust("GPU" + to_string(line.gpu), 4) + Fx::ub
 					+ Theme::c("inactive_fg") + ' '
+					+ ljust("-", cat_w) + ' '
 					+ ljust(line.detail, detail_w) + ' '
 					+ rjust("-", 7) + ' '
 					+ rjust("-", 4);
@@ -424,10 +422,9 @@ namespace Gpu::Workload {
 			const int vram_pct = static_cast<int>(std::clamp(line.vram_bytes * 100 / max_vram, 0LL, 100LL));
 			const string sm = line.sm_util >= 0 ? to_string(line.sm_util) + '%' : "-";
 
-			const bool tagged = detail.starts_with('[');
 			out += Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub + ' '
-				+ (tagged ? Theme::c("proc_misc") + Fx::b : Theme::c("title") + Fx::b)
-				+ ljust(detail, detail_w) + Fx::ub + ' '
+				+ Theme::c("proc_misc") + Fx::b + category_col(line.category) + Fx::ub + ' '
+				+ Theme::c("title") + Fx::b + ljust(detail, detail_w) + Fx::ub + ' '
 				+ Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, 7) + Fx::ub + ' '
 				+ (line.sm_util >= 0
 					? Theme::g("cpu").at(std::clamp(line.sm_util, 0, 100)) + Fx::b + rjust(sm, 4) + Fx::ub
