@@ -94,7 +94,7 @@ namespace Global {
 		{"#801414", "██████╔╝   ██║   ╚██████╔╝██║        ╚═╝    ╚═╝"},
 		{"#000000", "╚═════╝    ╚═╝    ╚═════╝ ╚═╝"},
 	};
-	const string Version = "1.4.7";
+	const string Version = "0.1.0";
 
 	int coreCount;
 	string overlay;
@@ -867,7 +867,7 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 			if (cli.config_file.has_value()) {
 				Config::conf_file = cli.config_file.value();
 			} else {
-				Config::conf_file = Config::conf_dir / "btop.conf";
+				Config::conf_file = Config::conf_dir / "gtop.conf";
 			}
 
 			auto log_file = Config::get_log_file();
@@ -913,12 +913,12 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	}
 #endif
 	if (std::error_code ec; not Global::self_path.empty()) {
-		Theme::theme_dir = fs::canonical(Global::self_path / "../share/btop/themes", ec);
+		Theme::theme_dir = fs::canonical(Global::self_path / "../share/gtop/themes", ec);
 		if (ec or not fs::is_directory(Theme::theme_dir) or access(Theme::theme_dir.c_str(), R_OK) == -1) Theme::theme_dir.clear();
 	}
 	//? If relative path failed, check two most common absolute paths
 	if (Theme::theme_dir.empty()) {
-		for (auto theme_path : {"/usr/local/share/btop/themes", "/usr/share/btop/themes"}) {
+		for (auto theme_path : {"/usr/local/share/gtop/themes", "/usr/share/gtop/themes"}) {
 			if (fs::is_directory(fs::path(theme_path)) and access(theme_path, R_OK) != -1) {
 				Theme::theme_dir = fs::path(theme_path);
 				break;
@@ -1038,9 +1038,22 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	}
 
 	if (not Config::set_boxes(Config::getS("shown_boxes"))) {
-		Config::set_boxes("cpu mem net proc");
-		Config::set("shown_boxes", "cpu mem net proc"s);
+		Config::set_boxes("cpu mem proc");
+		Config::set("shown_boxes", "cpu mem proc"s);
 	}
+
+#ifdef GPU_SUPPORT
+	// GPU-first default on fresh config: show all detected GPUs + compact system view
+	if (Config::write_new and Gpu::count > 0) {
+		string gpu_boxes;
+		for (int i = 0; i < Gpu::count; ++i)
+			gpu_boxes += fmt::format("gpu{} ", i);
+		gpu_boxes += "cpu mem proc";
+		if (Config::set_boxes(gpu_boxes)) {
+			Config::set("shown_boxes", gpu_boxes);
+		}
+	}
+#endif
 
 	//? Update list of available themes and generate the selected theme
 	Theme::updateThemes();

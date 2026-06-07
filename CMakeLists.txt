@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# CMake configuration for btop
+# CMake configuration for gtop++
 #
 
 cmake_minimum_required(VERSION 3.25)
@@ -10,9 +10,9 @@ if("${CMAKE_CURRENT_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_BINARY_DIR}")
   message(FATAL_ERROR "In-source builds are not allowed")
 endif()
 
-project("btop"
-  DESCRIPTION "A monitor of resources"
-  HOMEPAGE_URL "https://github.com/aristocratos/btop"
+project("gtop"
+  DESCRIPTION "GPU-first resource monitor (gtop++)"
+  HOMEPAGE_URL "https://github.com/datagod/gtop"
   LANGUAGES CXX
 )
 
@@ -28,7 +28,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_COLOR_DIAGNOSTICS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(BTOP_STATIC "Link btop statically" OFF)
+option(BTOP_STATIC "Link gtop statically" OFF)
 option(BTOP_GPU "Enable GPU support" ON)
 cmake_dependent_option(BTOP_RSMI_STATIC "Link statically to ROCm SMI" OFF "BTOP_GPU" OFF)
 
@@ -44,7 +44,7 @@ if(BTOP_STATIC AND NOT APPLE)
   set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 endif()
 
-add_executable(btop src/main.cpp)
+add_executable(gtop src/main.cpp)
 add_library(libbtop OBJECT
   src/btop.cpp
   src/btop_cli.cpp
@@ -58,11 +58,11 @@ add_library(libbtop OBJECT
   src/btop_tools.cpp
 )
 
-target_link_libraries(btop libbtop)
+target_link_libraries(gtop libbtop)
 
 if(BTOP_LTO)
   check_ipo_supported()
-  set_target_properties(btop PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
+  set_target_properties(gtop PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
   set_target_properties(libbtop PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
@@ -215,7 +215,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "Midni
   # default one since all use the default ones RPATH
   if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     string(REGEX MATCH "^[0-9]+" GCC_VERSION_MAJOR "${CMAKE_CXX_COMPILER_VERSION}")
-    set_target_properties(btop PROPERTIES
+    set_target_properties(gtop PROPERTIES
       INSTALL_RPATH "/usr/local/lib/gcc${GCC_VERSION_MAJOR}"
       BUILD_WITH_INSTALL_RPATH TRUE
     )
@@ -255,23 +255,23 @@ find_program(LOWDOWN_EXECUTABLE lowdown)
 if(LOWDOWN_EXECUTABLE)
   # Custom target to compile Markdown to man page using lowdown
   add_custom_command(
-    OUTPUT btop.1
-    COMMAND lowdown -s -T man -o btop.1 ${CMAKE_CURRENT_SOURCE_DIR}/manpage.md
+    OUTPUT gtop.1
+    COMMAND lowdown -s -T man -o gtop.1 ${CMAKE_CURRENT_SOURCE_DIR}/manpage.md
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/manpage.md
     VERBATIM
   )
-  add_custom_target(generate_manpage ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/btop.1)
+  add_custom_target(generate_manpage ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/gtop.1)
   # Install the man page
-  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/btop.1" DESTINATION "share/man/man1")
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/gtop.1" DESTINATION "share/man/man1")
 else()
-  message(STATUS "Command 'lowdown' not found: skipping generating man page btop.1")
+  message(STATUS "Command 'lowdown' not found: skipping generating man page gtop.1")
 endif()
 
-install(TARGETS btop RUNTIME)
-install(FILES "btop.desktop" DESTINATION "share/applications")
-install(FILES "Img/icon.png" DESTINATION "share/icons/hicolor/48x48/apps" RENAME "btop.png")
-install(FILES "Img/icon.svg" DESTINATION "share/icons/hicolor/scalable/apps" RENAME "btop.svg")
-install(DIRECTORY "themes" DESTINATION "share/btop")
+install(TARGETS gtop RUNTIME)
+install(FILES "gtop.desktop" DESTINATION "share/applications")
+install(FILES "Img/icon.png" DESTINATION "share/icons/hicolor/48x48/apps" RENAME "gtop.png")
+install(FILES "Img/icon.svg" DESTINATION "share/icons/hicolor/scalable/apps" RENAME "gtop.svg")
+install(DIRECTORY "themes" DESTINATION "share/gtop")
 
 include(CTest)
 if(BUILD_TESTING)

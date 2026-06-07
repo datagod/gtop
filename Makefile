@@ -1,4 +1,4 @@
-#* Btop++ makefile
+#* gtop++ makefile
 
 MAKEFILE_VERSION = 1.6
 
@@ -58,7 +58,7 @@ file_with_size = $(WHITE)$(1) $(2)$(YELLOW)($(WHITE)$$(du -ah "$(1)" 2>/dev/null
 step_duration = $$($(DATE_CMD) -d @$$(expr $$($(DATE_CMD) +%s 2>/dev/null || echo "0") - $(1) 2>/dev/null) -u +%Mm:%Ss 2>/dev/null |sed 's/^00m://' || echo 'unk')
 
 
-override BTOP_VERSION := $(shell head -n100 src/btop.cpp 2>/dev/null | grep "Version =" | cut -f2 -d"\"" || echo " unknown")
+override GTOP_VERSION := $(shell head -n100 src/btop.cpp 2>/dev/null | grep "Version =" | cut -f2 -d"\"" || echo " unknown")
 override TIMESTAMP := $(shell date +%s 2>/dev/null || echo "0")
 override DATESTAMP := $(shell date '+%Y-%m-%d %H:%M:%S' || echo "5 minutes ago")
 ifeq ($(shell command -v gdate >/dev/null; echo $$?),0)
@@ -282,7 +282,7 @@ endif
 
 #? Default Make
 .ONESHELL:
-all: | info rocm_smi info-quiet directories btop.1 config.h btop
+all: | info rocm_smi info-quiet directories gtop.1 config.h gtop
 
 ifneq ($(QUIET),true)
 info:
@@ -306,20 +306,20 @@ info:
 endif
 
 info-quiet: | info rocm_smi
-	@$(call green,Building btop++ $(RED)($(WHITE)v$(BTOP_VERSION)$(RED)) $(YELLOW)$(PLATFORM) $(CYAN)$(ARCH),,\n)
+	@$(call green,Building gtop++ $(RED)($(WHITE)v$(GTOP_VERSION)$(RED)) $(YELLOW)$(PLATFORM) $(CYAN)$(ARCH),,\n)
 
 help:
 	@printf " $(BANNER)\n"
-	@$(call white,btop++ makefile)
+	@$(call white,gtop++ makefile)
 	@printf "usage: make [argument]\n\n"
 	@printf "arguments:\n"
-	@printf "  all          Compile btop (default argument)\n"
+	@printf "  all          Compile gtop (default argument)\n"
 	@printf "  clean        Remove built objects\n"
 	@printf "  distclean    Remove built objects and binaries\n"
-	@printf "  install      Install btop++ to \$$PREFIX ($(PREFIX))\n"
+	@printf "  install      Install gtop++ to \$$PREFIX ($(PREFIX))\n"
 	@printf "  setcap       Set extended capabilities on binary (preferable to setuid)\n"
 	@printf "  setuid       Set installed binary owner/group to \$$SU_USER/\$$SU_GROUP ($(SU_USER)/$(SU_GROUP)) and set SUID bit\n"
-	@printf "  uninstall    Uninstall btop++ from \$$PREFIX\n"
+	@printf "  uninstall    Uninstall gtop++ from \$$PREFIX\n"
 	@printf "  info         Display information about Environment,compiler and linker flags\n"
 
 #? Make the Directories
@@ -337,7 +337,7 @@ $(BUILDDIR)/config.h: $(SRCDIR)/config.h.in | directories
 	@sed -e "s|@GIT_COMMIT@|$(GIT_COMMIT)|" -e "s|@CONFIGURE_COMMAND@|$(CONFIGURE_COMMAND)|" -e "s|@COMPILER@|$(CXX)|" -e "s|@COMPILER_VERSION@|$(CXX_VERSION)|" $< | tee $@ > /dev/null
 
 #? Man page
-btop.1: manpage.md | directories
+gtop.1: manpage.md | directories
 ifeq ($(shell command -v lowdown >/dev/null; echo $$?),0)
 	@$(call green,Generating man page $@,...,\n)
 	lowdown -s -Tman -o $@ $<
@@ -358,59 +358,59 @@ distclean: clean
 	@test -e lib/rocm_smi_lib/build && rm -rf lib/rocm_smi_lib/build || true
 
 install:
-	@$(call green,Installing binary to: $(WHITE)$(DESTDIR)$(PREFIX)/bin/btop)
+	@$(call green,Installing binary to: $(WHITE)$(DESTDIR)$(PREFIX)/bin/gtop)
 	@mkdir -p $(DESTDIR)$(PREFIX)/bin
-	@cp -p $(TARGETDIR)/btop $(DESTDIR)$(PREFIX)/bin/btop
-	@chmod 755 $(DESTDIR)$(PREFIX)/bin/btop
-	@$(call green,Installing doc to: $(WHITE)$(DESTDIR)$(PREFIX)/share/doc/btop)
-	@mkdir -p $(DESTDIR)$(PREFIX)/share/doc/btop
-	@cp -p README.md $(DESTDIR)$(PREFIX)/share/doc/btop
-	@mkdir -p $(DESTDIR)$(PREFIX)/share/btop
-	@$(call green,Installing themes to: $(WHITE)$(DESTDIR)$(PREFIX)/share/btop/themes)
-	@cp -pr themes $(DESTDIR)$(PREFIX)/share/btop
-	@$(call green,Installing desktop entry to: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/applications/btop.desktop)
+	@cp -p $(TARGETDIR)/gtop $(DESTDIR)$(PREFIX)/bin/gtop
+	@chmod 755 $(DESTDIR)$(PREFIX)/bin/gtop
+	@$(call green,Installing doc to: $(WHITE)$(DESTDIR)$(PREFIX)/share/doc/gtop)
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/doc/gtop
+	@cp -p README.md $(DESTDIR)$(PREFIX)/share/doc/gtop
+	@mkdir -p $(DESTDIR)$(PREFIX)/share/gtop
+	@$(call green,Installing themes to: $(WHITE)$(DESTDIR)$(PREFIX)/share/gtop/themes)
+	@cp -pr themes $(DESTDIR)$(PREFIX)/share/gtop
+	@$(call green,Installing desktop entry to: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/applications/gtop.desktop)
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/applications/
-	@cp -p btop.desktop $(DESTDIR)$(PREFIX)/share/applications/btop.desktop
-	@$(call green,Installing PNG icon to: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps/btop.png)
+	@cp -p gtop.desktop $(DESTDIR)$(PREFIX)/share/applications/gtop.desktop
+	@$(call green,Installing PNG icon to: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps/gtop.png)
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps
-	@cp -p Img/icon.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps/btop.png
-	@$(call green,Installing SVG icon to: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/btop.svg)
+	@cp -p Img/icon.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps/gtop.png
+	@$(call green,Installing SVG icon to: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/gtop.svg)
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps
-	@cp -p Img/icon.svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/btop.svg
-ifneq ($(wildcard btop.1),)
-	@$(call green,Installing man page to: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/man/man1/btop.1)
+	@cp -p Img/icon.svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/gtop.svg
+ifneq ($(wildcard gtop.1),)
+	@$(call green,Installing man page to: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/man/man1/gtop.1)
 	@mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
-	@cp -p btop.1 $(DESTDIR)$(PREFIX)/share/man/man1/btop.1
+	@cp -p gtop.1 $(DESTDIR)$(PREFIX)/share/man/man1/gtop.1
 endif
 
 #? Set SUID bit for btop as $SU_USER in $SU_GROUP
 setuid:
-	@$(call white,File: $(DESTDIR)$(PREFIX)/bin/btop)
+	@$(call white,File: $(DESTDIR)$(PREFIX)/bin/gtop)
 	@$(call green,Setting owner ,$(WHITE)$(SU_USER):$(SU_GROUP))
-	@chown $(SU_USER):$(SU_GROUP) $(DESTDIR)$(PREFIX)/bin/btop
+	@chown $(SU_USER):$(SU_GROUP) $(DESTDIR)$(PREFIX)/bin/gtop
 	@$(call green,Setting SUID bit)
-	@chmod u+s $(DESTDIR)$(PREFIX)/bin/btop
+	@chmod u+s $(DESTDIR)$(PREFIX)/bin/gtop
 
 #? Run setcap on btop for extended capabilities
 setcap:
-	@$(call white,File: $(DESTDIR)$(PREFIX)/bin/btop)
+	@$(call white,File: $(DESTDIR)$(PREFIX)/bin/gtop)
 	@$(call green,Setting capabilities,...)
-	@setcap "cap_perfmon=+ep cap_dac_read_search=+ep" $(DESTDIR)$(PREFIX)/bin/btop
+	@setcap "cap_perfmon=+ep cap_dac_read_search=+ep" $(DESTDIR)$(PREFIX)/bin/gtop
 
 # With 'rm -v' user will see what files (if any) got removed
 uninstall:
-	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/bin/btop)
-	@rm -rfv $(DESTDIR)$(PREFIX)/bin/btop
-	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/btop)
-	@rm -rfv $(DESTDIR)$(PREFIX)/share/btop
-	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/applications/btop.desktop)
-	@rm -rfv $(DESTDIR)$(PREFIX)/share/applications/btop.desktop
-	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps/btop.png)
-	@rm -rfv $(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps/btop.png
-	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/btop.svg)
-	@rm -rfv $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/btop.svg
-	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/man/man1/btop.1)
-	@rm -rfv $(DESTDIR)$(PREFIX)/share/man/man1/btop.1
+	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/bin/gtop)
+	@rm -rfv $(DESTDIR)$(PREFIX)/bin/gtop
+	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/gtop)
+	@rm -rfv $(DESTDIR)$(PREFIX)/share/gtop
+	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/applications/gtop.desktop)
+	@rm -rfv $(DESTDIR)$(PREFIX)/share/applications/gtop.desktop
+	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps/gtop.png)
+	@rm -rfv $(DESTDIR)$(PREFIX)/share/icons/hicolor/48x48/apps/gtop.png
+	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/gtop.svg)
+	@rm -rfv $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/gtop.svg
+	@$(call red,Removing: ,$(WHITE)$(DESTDIR)$(PREFIX)/share/man/man1/gtop.1)
+	@rm -rfv $(DESTDIR)$(PREFIX)/share/man/man1/gtop.1
 
 #? Pull in dependency info for *existing* .o files
 -include $(OBJECTS:.$(OBJEXT)=.$(DEPEXT))
@@ -448,13 +448,13 @@ endif
 
 #? Link
 .ONESHELL:
-btop: $(OBJECTS) | rocm_smi directories
+gtop: $(OBJECTS) | rocm_smi directories
 	@sleep 0.2 2>/dev/null || true
 	@TSTAMP=$$(date +%s 2>/dev/null || echo "0")
 	@$(QUIET) || $(call green,Linking and optimizing binary,...,\n)
-	@$(VERBOSE) || printf "$(CXX) -o $(TARGETDIR)/btop $^ $(LDFLAGS)\n"
-	@$(CXX) -o $(TARGETDIR)/btop $^ $(LDFLAGS) || exit 1
-	@$(call green,100% -> $(call file_with_size,$(TARGETDIR)/btop,$(call CUR_LEFT,100)$(call CUR_RIGHT,38)) $(GREEN)($(WHITE)$(call step_duration,$$TSTAMP)$(GREEN)))
+	@$(VERBOSE) || printf "$(CXX) -o $(TARGETDIR)/gtop $^ $(LDFLAGS)\n"
+	@$(CXX) -o $(TARGETDIR)/gtop $^ $(LDFLAGS) || exit 1
+	@$(call green,100% -> $(call file_with_size,$(TARGETDIR)/gtop,$(call CUR_LEFT,100)$(call CUR_RIGHT,38)) $(GREEN)($(WHITE)$(call step_duration,$$TSTAMP)$(GREEN)))
 	@$(call green,Build complete in $(GREEN)($(WHITE)$(call step_duration,$(TIMESTAMP))$(GREEN)),,\n)
 
 #? Compile

@@ -1,20 +1,21 @@
-% btop(1) | User Commands
+% gtop(1) | User Commands
 %
-% 2025-05-01
+% 2026-06-07
 
 # NAME
 
-btop - Resource monitor that shows usage and stats for processor, memory, disks, network, and processes.
+gtop - GPU-first resource monitor forked from btop++.
 
 # SYNOPSIS
 
-**btop** [**-c** _file_] [**-d**] [**-f** _filter_] [**-l**] [**-p** _id_] [**-t**] [**-u** _ms_] [**\-\-force-utf**] [**\-\-themes-dir** _dir_]
+**gtop** [**-c** _file_] [**-d**] [**-f** _filter_] [**-l**] [**-p** _id_] [**-t**] [**-u** _ms_] [**\-\-force-utf**] [**\-\-themes-dir** _dir_]
 
-**btop** [**\-\-default-config** | {**-h** | **\-\-help**} | {**-V** | **\-\-version**}]
+**gtop** [**\-\-default-config** | {**-h** | **\-\-help**} | {**-V** | **\-\-version**}]
 
 # DESCRIPTION
 
-**btop** is a program that shows usage and stats for processor, memory, disks, network, and processes.
+**gtop** (gtop++) shows CPU, memory, network, process, and GPU usage in the
+terminal, with a GPU-first default layout.
 
 # OPTIONS
 
@@ -46,7 +47,7 @@ starting with two dashes ('-'). A summary of options is included below.
 :   Force disable tty mode.
 
 **\-\-themes-dir _dir_**
-:   Path to a custom themes directory. When specified, this directory takes priority over the default theme search paths.
+:   Path to a custom themes directory.
 
 **-u**, **\-\-update _ms_**
 :   Set an initial update rate in milliseconds.
@@ -62,12 +63,14 @@ starting with two dashes ('-'). A summary of options is included below.
 
 # BUGS
 
-The upstream bug tracker can be found at https://github.com/aristocratos/btop/issues.
+Report issues at https://github.com/datagod/gtop/issues.
 
 # SEE ALSO
 
-**top**(1), **htop**(1)
+**btop**(1), **top**(1), **htop**(1)
 
 # AUTHOR
 
-**btop** was written by Jakob P. Liljenberg a.k.a. "Aristocratos".
+gtop++ is maintained at https://github.com/datagod/gtop.
+
+Based on **btop++** by Jakob P. Liljenberg (Aristocratos).

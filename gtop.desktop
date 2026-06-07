@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=gtop++
+GenericName=GPU System Monitor
+Comment=GPU-first resource monitor forked from btop++
+Icon=gtop
+Exec=gtop
+Terminal=true
+Categories=System;Monitor;ConsoleOnly;
+Keywords=gpu;nvidia;system;process;monitor

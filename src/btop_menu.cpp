@@ -217,7 +217,7 @@ namespace Menu {
 		{"Selected N", "Select new nice value for selected process."},
 		{"", " "},
 		{"", "For bug reporting and project updates, visit:"},
-		{"", "https://github.com/aristocratos/btop"},
+		{"", "https://github.com/datagod/gtop"},
 	};
 
 	const vector<vector<vector<string>>> categories = {
@@ -226,14 +226,14 @@ namespace Menu {
 				"Set color theme.",
 				"",
 				"Choose from all theme files in (usually)",
-				"\"/usr/[local/]share/btop/themes\" and",
-				"\"~/.config/btop/themes\".",
+				"\"/usr/[local/]share/gtop/themes\" and",
+				"\"~/.config/gtop/themes\".",
 				"",
 				"\"Default\" for builtin default theme.",
 				"\"TTY\" for builtin 16-color theme.",
 				"",
 				"For theme updates see:",
-				"https://github.com/aristocratos/btop"},
+				"https://github.com/datagod/gtop"},
 			{"theme_background",
 				"If the theme set background should be shown.",
 				"",
