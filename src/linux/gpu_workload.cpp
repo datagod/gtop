@@ -204,8 +204,8 @@ namespace Gpu::Workload {
 
 		if (redraw) {
 			out += box;
-			out += Mv::to(y + 1, x + 1) + Theme::c("hi_fg") + Fx::b
-				+ ljust("GPU", 4) + ' '
+			out += Mv::to(y + 1, x + 1) + Theme::c("title") + Fx::b
+				+ Theme::c("hi_fg") + ljust("GPU", 4) + Theme::c("title") + ' '
 				+ ljust("Model / process", label_w) + ' '
 				+ rjust("VRAM", 7) + ' '
 				+ rjust("SM%", 4) + ' '
@@ -217,22 +217,23 @@ namespace Gpu::Workload {
 		for (const auto& e : entries)
 			by_gpu[e.gpu_index].push_back(&e);
 
-		struct row_line { string text; bool idle = false; };
-		vector<row_line> rows;
+		struct wl_row {
+			int gpu = -1;
+			bool show_gpu = false;
+			bool idle = false;
+			string label;
+			long long vram_bytes = 0;
+			int sm_util = -1;
+			unsigned int pid = 0;
+		};
+		vector<wl_row> rows;
 		rows.reserve(entries.size() + Gpu::count);
 
 		const int per_gpu_max = std::max(1, max_rows / std::max(1, Gpu::count));
 
 		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
 			if (not by_gpu.contains(gpu)) {
-				rows.push_back({
-					ljust("GPU" + to_string(gpu), 4) + ' '
-						+ ljust("(idle)", label_w) + ' '
-						+ rjust("-", 7) + ' '
-						+ rjust("-", 4) + ' '
-						+ rjust("-", 7),
-					true
-				});
+				rows.push_back({.gpu = gpu, .show_gpu = true, .idle = true, .label = "(idle)"});
 				continue;
 			}
 
@@ -245,20 +246,15 @@ namespace Gpu::Workload {
 
 			bool first = true;
 			for (const auto* e : procs) {
-				const string gpu_col = first ? ljust("GPU" + to_string(gpu), 4) : ljust("", 4);
-				first = false;
-
-				const string vram = floating_humanizer(e->vram_bytes);
-				const string sm = e->sm_util >= 0 ? to_string(e->sm_util) + '%' : "-";
-				const string label = uresize(e->label, label_w);
-
 				rows.push_back({
-					gpu_col + ' '
-						+ ljust(label, label_w) + ' '
-						+ rjust(vram, 7) + ' '
-						+ rjust(sm, 4) + ' '
-						+ rjust(to_string(e->pid), 7)
+					.gpu = gpu,
+					.show_gpu = first,
+					.label = e->label,
+					.vram_bytes = e->vram_bytes,
+					.sm_util = e->sm_util,
+					.pid = e->pid
 				});
+				first = false;
 			}
 		}
 
@@ -267,11 +263,38 @@ namespace Gpu::Workload {
 
 		(void)data_same;
 
+		long long max_vram = 1;
+		for (const auto& e : entries)
+			max_vram = std::max(max_vram, e.vram_bytes);
+
 		int row = 2;
 		for (const auto& line : rows) {
-			out += Mv::to(y + row++, x + 1)
-				+ (line.idle ? Theme::c("inactive_fg") : Theme::c("main_fg"))
-				+ line.text;
+			out += Mv::to(y + row++, x + 1);
+
+			if (line.idle) {
+				out += Theme::c("hi_fg") + Fx::b
+					+ ljust("GPU" + to_string(line.gpu), 4) + Fx::ub
+					+ Theme::c("inactive_fg") + ' '
+					+ ljust(line.label, label_w) + ' '
+					+ rjust("-", 7) + ' '
+					+ rjust("-", 4) + ' '
+					+ rjust("-", 7);
+				continue;
+			}
+
+			const string gpu_col = line.show_gpu ? ljust("GPU" + to_string(line.gpu), 4) : ljust("", 4);
+			const string label = uresize(line.label, label_w);
+			const string vram = floating_humanizer(line.vram_bytes);
+			const int vram_pct = static_cast<int>(std::clamp(line.vram_bytes * 100 / max_vram, 0LL, 100LL));
+			const string sm = line.sm_util >= 0 ? to_string(line.sm_util) + '%' : "-";
+
+			out += Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub
+				+ Theme::c("title") + Fx::b + ' ' + ljust(label, label_w) + Fx::ub + ' '
+				+ Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, 7) + Fx::ub + ' '
+				+ (line.sm_util >= 0
+					? Theme::g("cpu").at(std::clamp(line.sm_util, 0, 100)) + Fx::b + rjust(sm, 4) + Fx::ub
+					: Theme::c("inactive_fg") + rjust(sm, 4))
+				+ Theme::c("proc_misc") + Fx::b + rjust(to_string(line.pid), 7) + Fx::ub;
 		}
 
 		redraw = false;
