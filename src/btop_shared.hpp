@@ -148,6 +148,15 @@ namespace Gpu {
 				 decoder_utilization = true;
 	};
 
+	struct gpu_proc_entry {
+		int gpu_index = -1;
+		unsigned int pid = 0;
+		string process_name;
+		string label;
+		long long vram_bytes = 0;
+		int sm_util = -1;
+	};
+
 	//* Per-device container for GPU info
 	struct gpu_info {
 		std::unordered_map<string, deque<long long>> gpu_percent = {
@@ -177,9 +186,19 @@ namespace Gpu {
 
 		gpu_info_supported supported_functions;
 
-		// vector<proc_info> graphics_processes = {}; // TODO
-		// vector<proc_info> compute_processes = {};
+		vector<gpu_proc_entry> compute_processes;
 	};
+
+	namespace Workload {
+		extern int x, y, width, height;
+		extern bool shown, redraw;
+		extern string box;
+		extern vector<gpu_proc_entry> entries;
+
+		void collect(bool no_update = false);
+		string draw(bool force_redraw = false, bool data_same = false);
+		int reserved_height();
+	}
 
 	namespace Nvml {
 		extern bool shutdown();

@@ -583,6 +583,23 @@ namespace Runner {
                         throw std::runtime_error("Gpu:: -> " + string{e.what()});
 					}
 				}
+
+				//? GPU workloads (bottom panel)
+				if (Gpu::Workload::shown) {
+					try {
+						if (Global::debug) debug_timer("gpu-wl", collect_begin);
+						Gpu::Workload::collect(conf.no_update);
+						if (Global::debug) debug_timer("gpu-wl", draw_begin);
+
+						if (not pause_output)
+							output += Gpu::Workload::draw(conf.force_redraw, conf.no_update);
+
+						if (Global::debug) debug_timer("gpu-wl", draw_done);
+					}
+					catch (const std::exception& e) {
+						throw std::runtime_error("Gpu::Workload:: -> " + string{e.what()});
+					}
+				}
 			#endif
 				//? MEM
 				if (v_contains(conf.boxes, "mem")) {
