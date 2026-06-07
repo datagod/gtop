@@ -2406,7 +2406,7 @@ namespace Draw {
 				Gpu::Workload::redraw = true;
 				Gpu::Workload::box = createBox(
 					Gpu::Workload::x, Gpu::Workload::y, Gpu::Workload::width, Gpu::Workload::height,
-					Theme::c("cpu_box"), true, "workloads", "", 5
+					Theme::c("workload_box"), true, "workloads", "", 5
 				);
 			}
 		}
