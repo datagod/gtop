@@ -9,6 +9,8 @@ load-balance hints in upcoming releases.
 The installed binary and config paths use **`gtop`** (e.g. run `gtop`, config in
 `~/.config/gtop/gtop.conf`).
 
+This project was created using [Grok Build](https://docs.x.ai/build/overview).
+
 ## Quick start
 
 ```bash
