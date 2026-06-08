@@ -507,6 +507,131 @@ namespace Gpu::Workload {
 		return to_string(seconds / 3600) + 'h' + to_string((seconds % 3600) / 60) + 'm';
 	}
 
+	int work_subline_width(const int panel_width) {
+		constexpr int col_work = 15;
+		return std::max(10, panel_width - col_work + 1);
+	}
+
+	vector<string> wrap_text(const string& text, const size_t max_w) {
+		vector<string> lines;
+		if (text.empty() or max_w < 1) return lines;
+
+		string rest = text;
+		while (ulen(rest) > max_w) {
+			const string chunk = uresize(rest, max_w);
+			size_t byte_break = chunk.size();
+
+			if (const auto sep = chunk.rfind(" · "); sep != string::npos and ulen(rest.substr(0, sep)) >= 4)
+				byte_break = sep;
+			else if (const auto sp = chunk.rfind(' '); sp != string::npos and sp > 0)
+				byte_break = sp;
+
+			lines.push_back(string(trim(rest.substr(0, byte_break))));
+			rest = string(trim(rest.substr(byte_break)));
+			if (rest.starts_with("·"))
+				rest = string(trim(rest.substr(1)));
+		}
+		if (not rest.empty())
+			lines.push_back(rest);
+		return lines;
+	}
+
+	enum class wl_kind { idle, gpu_hdr, proc_main, proc_sub };
+
+	struct wl_row {
+		wl_kind kind = wl_kind::idle;
+		int gpu = -1;
+		bool show_gpu = false;
+		string text;
+		const gpu_proc_entry* proc = nullptr;
+	};
+
+	vector<wl_row> build_rows(const int subline_w) {
+		std::unordered_map<int, vector<const gpu_proc_entry*>> by_gpu;
+		for (const auto& e : entries)
+			by_gpu[e.gpu_index].push_back(&e);
+
+		vector<wl_row> rows;
+		rows.reserve(entries.size() * 3 + Gpu::count * 2);
+
+		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
+			if (not by_gpu.contains(gpu) or by_gpu[gpu].empty()) {
+				rows.push_back({.kind = wl_kind::idle, .gpu = gpu, .show_gpu = true, .text = "(idle)"});
+				continue;
+			}
+
+			auto& procs = by_gpu[gpu];
+			std::ranges::sort(procs, [](const auto* a, const auto* b) {
+				return a->vram_bytes > b->vram_bytes;
+			});
+
+			for (const auto& summary_line : wrap_text(gpu_summary_line(gpu, procs), subline_w))
+				rows.push_back({.kind = wl_kind::gpu_hdr, .gpu = gpu, .show_gpu = true, .text = summary_line});
+
+			bool first = true;
+			for (const auto* e : procs) {
+				rows.push_back({.kind = wl_kind::proc_main, .gpu = gpu, .show_gpu = first, .proc = e});
+				if (not e->subline.empty()) {
+					const auto wrapped = wrap_text(e->subline, subline_w);
+					for (size_t i = 0; i < wrapped.size(); ++i) {
+						string wline = wrapped[i];
+						if (i > 0) {
+							if (wline.starts_with("▸ "))
+								wline = wline.substr(2);
+							wline = "  " + wline;
+						}
+						rows.push_back({.kind = wl_kind::proc_sub, .gpu = gpu, .text = std::move(wline), .proc = e});
+					}
+				}
+				first = false;
+			}
+		}
+		return rows;
+	}
+
+	bool entries_layout_changed() {
+		static vector<unsigned int> last_pids;
+		static vector<int> last_gpus;
+		static vector<string> last_labels, last_sublines;
+
+		if (entries.size() != last_pids.size()) {
+			last_pids.clear();
+			last_gpus.clear();
+			last_labels.clear();
+			last_sublines.clear();
+			for (const auto& e : entries) {
+				last_pids.push_back(e.pid);
+				last_gpus.push_back(e.gpu_index);
+				last_labels.push_back(e.label);
+				last_sublines.push_back(e.subline);
+			}
+			return true;
+		}
+
+		bool changed = false;
+		for (size_t i = 0; i < entries.size(); ++i) {
+			if (entries[i].pid != last_pids[i]
+				or entries[i].gpu_index != last_gpus[i]
+				or entries[i].label != last_labels[i]
+				or entries[i].subline != last_sublines[i]) {
+				changed = true;
+				break;
+			}
+		}
+
+		last_pids.clear();
+		last_gpus.clear();
+		last_labels.clear();
+		last_sublines.clear();
+		for (const auto& e : entries) {
+			last_pids.push_back(e.pid);
+			last_gpus.push_back(e.gpu_index);
+			last_labels.push_back(e.label);
+			last_sublines.push_back(e.subline);
+		}
+		return changed;
+	}
+
 	} // namespace
 
 	void collect(const bool no_update) {
@@ -584,27 +709,18 @@ namespace Gpu::Workload {
 		if (need != last_reserved) {
 			last_reserved = need;
 			Global::resized = true;
+			redraw = true;
 		}
-
-		redraw = true;
+		else if (entries_layout_changed())
+			redraw = true;
 	}
 
 	int reserved_height() {
 		if (not Config::getB("show_gpu_workloads") or Gpu::shown < 1)
 			return 0;
 
-		std::unordered_map<int, int> per_gpu;
-		for (const auto& e : entries)
-			per_gpu[e.gpu_index]++;
-
-		int data_rows = 0;
-		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
-			if (per_gpu[gpu] == 0)
-				data_rows += 1;
-			else
-				data_rows += 1 + per_gpu[gpu] * 2;
-		}
-
+		const int panel_w = width > 0 ? width : 80;
+		const int data_rows = static_cast<int>(build_rows(work_subline_width(panel_w)).size());
 		const int cap = std::clamp(Config::getI("workload_panel_max_height"), 8, 28);
 		return std::clamp(data_rows + 3, 6, cap);
 	}
@@ -638,6 +754,12 @@ namespace Gpu::Workload {
 		const int subline_w = std::max(10, width - col_work + 1);
 		const int max_rows = std::max(0, height - 3);
 
+		const int inner_w = std::max(0, width - 2);
+
+		const auto clear_row = [&](const int row_y) {
+			out += Mv::to(y + row_y, x + 1) + string(inner_w, ' ');
+		};
+
 		const auto cell = [&](const int row_y, const int col_x, const string& content) {
 			out += Mv::to(y + row_y, x + col_x);
 			out += content;
@@ -669,49 +791,7 @@ namespace Gpu::Workload {
 			cell(1, col_dec, hdr + rjust("DEC", dec_w) + Fx::ub);
 		}
 
-		std::unordered_map<int, vector<const gpu_proc_entry*>> by_gpu;
-		for (const auto& e : entries)
-			by_gpu[e.gpu_index].push_back(&e);
-
-		enum class wl_kind { idle, gpu_hdr, proc_main, proc_sub };
-
-		struct wl_row {
-			wl_kind kind = wl_kind::idle;
-			int gpu = -1;
-			bool show_gpu = false;
-			string summary;
-			const gpu_proc_entry* proc = nullptr;
-		};
-		vector<wl_row> rows;
-		rows.reserve(entries.size() * 2 + Gpu::count * 2);
-
-		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
-			if (not by_gpu.contains(gpu) or by_gpu[gpu].empty()) {
-				rows.push_back({.kind = wl_kind::idle, .gpu = gpu, .show_gpu = true});
-				continue;
-			}
-
-			auto& procs = by_gpu[gpu];
-			std::ranges::sort(procs, [](const auto* a, const auto* b) {
-				return a->vram_bytes > b->vram_bytes;
-			});
-
-			rows.push_back({
-				.kind = wl_kind::gpu_hdr,
-				.gpu = gpu,
-				.show_gpu = true,
-				.summary = gpu_summary_line(gpu, procs)
-			});
-
-			bool first = true;
-			for (const auto* e : procs) {
-				rows.push_back({.kind = wl_kind::proc_main, .gpu = gpu, .show_gpu = first, .proc = e});
-				if (not e->subline.empty())
-					rows.push_back({.kind = wl_kind::proc_sub, .gpu = gpu, .proc = e});
-				first = false;
-			}
-		}
-
+		auto rows = build_rows(subline_w);
 		if (rows.size() > static_cast<size_t>(max_rows))
 			rows.resize(max_rows);
 
@@ -723,20 +803,21 @@ namespace Gpu::Workload {
 
 		int row = 2;
 		for (const auto& line : rows) {
+			clear_row(row);
 			switch (line.kind) {
 			case wl_kind::idle:
 				cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + ljust("GPU" + to_string(line.gpu), gpu_w) + Fx::ub);
-				cell(row, col_work, Theme::c("inactive_fg") + ljust("(idle)", detail_w, true));
+				cell(row, col_work, Theme::c("inactive_fg")
+					+ ljust(uresize(line.text, detail_w), detail_w, true));
 				break;
 			case wl_kind::gpu_hdr:
 				cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + ljust("GPU" + to_string(line.gpu), gpu_w) + Fx::ub);
 				cell(row, col_work, Theme::c("proc_misc") + Fx::b
-					+ ljust(uresize(line.summary, subline_w), subline_w, true) + Fx::ub);
+					+ ljust(uresize(line.text, subline_w), subline_w, true) + Fx::ub);
 				break;
 			case wl_kind::proc_main: {
 				const auto& e = *line.proc;
 				const string gpu_col = line.show_gpu ? ljust("GPU" + to_string(line.gpu), gpu_w) : ljust("", gpu_w);
-				const string label = ljust(uresize(e.label, detail_w), detail_w, true);
 				const string vram = floating_humanizer(e.vram_bytes);
 				const int vram_pct = static_cast<int>(std::clamp(e.vram_bytes * 100 / max_vram, 0LL, 100LL));
 				const string sm = e.sm_util >= 0 ? to_string(e.sm_util) + '%' : "-";
@@ -744,7 +825,8 @@ namespace Gpu::Workload {
 
 				cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub);
 				cell(row, col_type, Theme::c("proc_misc") + Fx::b + category_col(e.category) + Fx::ub);
-				cell(row, col_work, Theme::c("title") + Fx::b + label + Fx::ub);
+				cell(row, col_work, Theme::c("title") + Fx::b
+					+ ljust(uresize(e.label, detail_w), detail_w, true) + Fx::ub);
 				cell(row, col_vram, Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, vram_w) + Fx::ub);
 				cell(row, col_sm, e.sm_util >= 0
 					? Theme::g("cpu").at(std::clamp(e.sm_util, 0, 100)) + Fx::b + rjust(sm, sm_w) + Fx::ub
@@ -756,13 +838,16 @@ namespace Gpu::Workload {
 				break;
 			}
 			case wl_kind::proc_sub:
-				if (line.proc != nullptr and not line.proc->subline.empty())
+				if (not line.text.empty())
 					cell(row, col_work, Theme::c("inactive_fg")
-						+ ljust(uresize(line.proc->subline, subline_w), subline_w, true));
+						+ ljust(uresize(line.text, subline_w), subline_w, true));
 				break;
 			}
 			++row;
 		}
+
+		while (row <= height - 2)
+			clear_row(row++);
 
 		redraw = false;
 		return out + Fx::reset;
