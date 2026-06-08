@@ -157,6 +157,9 @@ namespace Gpu {
 		string detail;
 		long long vram_bytes = 0;
 		int sm_util = -1;
+		int enc_util = -1;
+		int dec_util = -1;
+		int runtime_s = -1;
 	};
 
 	//* Per-device container for GPU info

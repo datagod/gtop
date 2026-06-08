@@ -377,8 +377,18 @@ namespace Gpu::Workload {
 		return map;
 	}
 
-	std::unordered_map<unsigned int, int> collect_pmon() {
-		std::unordered_map<unsigned int, int> util;
+	struct pmon_stats {
+		int sm_util = -1;
+		int enc_util = -1;
+		int dec_util = -1;
+	};
+
+	int parse_pmon_pct(const string& val) {
+		return (val != "-" and isint(val)) ? std::stoi(val) : -1;
+	}
+
+	std::unordered_map<unsigned int, pmon_stats> collect_pmon() {
+		std::unordered_map<unsigned int, pmon_stats> util;
 		string out;
 		if (not run_command("nvidia-smi pmon -c 1 2>/dev/null", out))
 			return util;
@@ -387,12 +397,51 @@ namespace Gpu::Workload {
 			line = trim(line);
 			if (line.empty() or line[0] == '#') continue;
 			std::istringstream iss(line);
-			string gpu_s, pid_s, type, sm_s;
-			iss >> gpu_s >> pid_s >> type >> sm_s;
-			if (sm_s == "-" or not isint(pid_s) or not isint(sm_s)) continue;
-			util[std::stoul(pid_s)] = std::stoi(sm_s);
+			string gpu_s, pid_s, type, sm_s, mem_s, enc_s, dec_s;
+			iss >> gpu_s >> pid_s >> type >> sm_s >> mem_s >> enc_s >> dec_s;
+			if (not isint(pid_s)) continue;
+
+			pmon_stats stats;
+			stats.sm_util = parse_pmon_pct(sm_s);
+			stats.enc_util = parse_pmon_pct(enc_s);
+			stats.dec_util = parse_pmon_pct(dec_s);
+			util[std::stoul(pid_s)] = stats;
 		}
 		return util;
+	}
+
+	int get_process_runtime_s(const unsigned int pid) {
+		const auto stat = readfile(fs::path("/proc") / std::to_string(pid) / "stat");
+		if (stat.empty()) return -1;
+
+		const auto rparen = stat.rfind(')');
+		if (rparen == string::npos) return -1;
+
+		std::istringstream iss(stat.substr(rparen + 2));
+		string token;
+		for (int field = 3; field <= 22; ++field) {
+			if (not (iss >> token)) return -1;
+			if (field == 22) {
+				try {
+					const unsigned long long start = std::stoull(token);
+					const auto uptime_raw = readfile(fs::path("/proc/uptime"));
+					if (uptime_raw.empty()) return -1;
+					const double uptime = std::stod(string(trim(uptime_raw.substr(0, uptime_raw.find(' ')))));
+					const long hz = sysconf(_SC_CLK_TCK);
+					return std::max(0, static_cast<int>(uptime - start / (hz > 0 ? hz : 100)));
+				} catch (...) {
+					return -1;
+				}
+			}
+		}
+		return -1;
+	}
+
+	string format_runtime(const int seconds) {
+		if (seconds < 0) return "-";
+		if (seconds < 60) return to_string(seconds) + 's';
+		if (seconds < 3600) return to_string(seconds / 60) + 'm';
+		return to_string(seconds / 3600) + 'h' + to_string((seconds % 3600) / 60) + 'm';
 	}
 
 	} // namespace
@@ -448,8 +497,13 @@ namespace Gpu::Workload {
 					e.label = model;
 			}
 			e.detail = build_detail(e.label, e.process_name, cmd, container);
-			if (pmon.contains(e.pid))
-				e.sm_util = pmon.at(e.pid);
+			e.runtime_s = get_process_runtime_s(e.pid);
+			if (pmon.contains(e.pid)) {
+				const auto& stats = pmon.at(e.pid);
+				e.sm_util = stats.sm_util;
+				e.enc_util = stats.enc_util;
+				e.dec_util = stats.dec_util;
+			}
 
 			entries.push_back(std::move(e));
 		}
@@ -482,7 +536,10 @@ namespace Gpu::Workload {
 		out.reserve(width * height);
 
 		constexpr int cat_w = 8;
-		const int detail_w = std::max(16, width - 29);
+		constexpr int uptime_w = 6;
+		constexpr int enc_w = 4;
+		constexpr int dec_w = 4;
+		const int detail_w = std::max(10, width - 43);
 		const int max_rows = std::max(0, height - 3);
 
 		if (redraw) {
@@ -492,7 +549,10 @@ namespace Gpu::Workload {
 				+ ljust("Type", cat_w) + ' '
 				+ ljust("Workload", detail_w) + ' '
 				+ rjust("VRAM", 7) + ' '
-				+ rjust("SM%", 4)
+				+ rjust("SM%", 4) + ' '
+				+ rjust("Up", uptime_w) + ' '
+				+ rjust("ENC", enc_w) + ' '
+				+ rjust("DEC", dec_w)
 				+ Fx::ub;
 		}
 
@@ -508,6 +568,9 @@ namespace Gpu::Workload {
 			string detail;
 			long long vram_bytes = 0;
 			int sm_util = -1;
+			int enc_util = -1;
+			int dec_util = -1;
+			int runtime_s = -1;
 		};
 		vector<wl_row> rows;
 		rows.reserve(entries.size() + Gpu::count);
@@ -535,7 +598,10 @@ namespace Gpu::Workload {
 					.category = e->category,
 					.detail = e->detail,
 					.vram_bytes = e->vram_bytes,
-					.sm_util = e->sm_util
+					.sm_util = e->sm_util,
+					.enc_util = e->enc_util,
+					.dec_util = e->dec_util,
+					.runtime_s = e->runtime_s
 				});
 				first = false;
 			}
@@ -558,6 +624,13 @@ namespace Gpu::Workload {
 				return category.empty() ? ljust("-", cat_w) : ljust('[' + category + ']', cat_w);
 			};
 
+			const auto pct_cell = [](const int val, const int w) -> string {
+				if (val < 0)
+					return Theme::c("inactive_fg") + rjust("-", w);
+				const string text = to_string(val) + '%';
+				return Theme::g("cpu").at(std::clamp(val, 0, 100)) + Fx::b + rjust(text, w) + Fx::ub;
+			};
+
 			if (line.idle) {
 				out += Theme::c("hi_fg") + Fx::b
 					+ ljust("GPU" + to_string(line.gpu), 4) + Fx::ub
@@ -565,7 +638,10 @@ namespace Gpu::Workload {
 					+ ljust("-", cat_w) + ' '
 					+ ljust(line.detail, detail_w) + ' '
 					+ rjust("-", 7) + ' '
-					+ rjust("-", 4);
+					+ rjust("-", 4) + ' '
+					+ rjust("-", uptime_w) + ' '
+					+ rjust("-", enc_w) + ' '
+					+ rjust("-", dec_w);
 				continue;
 			}
 
@@ -574,6 +650,7 @@ namespace Gpu::Workload {
 			const string vram = floating_humanizer(line.vram_bytes);
 			const int vram_pct = static_cast<int>(std::clamp(line.vram_bytes * 100 / max_vram, 0LL, 100LL));
 			const string sm = line.sm_util >= 0 ? to_string(line.sm_util) + '%' : "-";
+			const string uptime = uresize(format_runtime(line.runtime_s), uptime_w);
 
 			out += Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub + ' '
 				+ Theme::c("proc_misc") + Fx::b + category_col(line.category) + Fx::ub + ' '
@@ -581,7 +658,10 @@ namespace Gpu::Workload {
 				+ Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, 7) + Fx::ub + ' '
 				+ (line.sm_util >= 0
 					? Theme::g("cpu").at(std::clamp(line.sm_util, 0, 100)) + Fx::b + rjust(sm, 4) + Fx::ub
-					: Theme::c("inactive_fg") + rjust(sm, 4));
+					: Theme::c("inactive_fg") + rjust(sm, 4))
+				+ ' ' + Theme::c("title") + rjust(uptime, uptime_w)
+				+ ' ' + pct_cell(line.enc_util, enc_w)
+				+ ' ' + pct_cell(line.dec_util, dec_w);
 		}
 
 		redraw = false;
