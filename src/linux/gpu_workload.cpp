@@ -535,25 +535,53 @@ namespace Gpu::Workload {
 		string out;
 		out.reserve(width * height);
 
+		constexpr int gpu_w = 4;
 		constexpr int cat_w = 8;
+		constexpr int vram_w = 7;
+		constexpr int sm_w = 4;
 		constexpr int uptime_w = 6;
 		constexpr int enc_w = 4;
 		constexpr int dec_w = 4;
-		const int detail_w = std::max(10, width - 43);
+		constexpr int col_gpu = 1;
+		constexpr int col_type = col_gpu + gpu_w + 1;
+		constexpr int col_work = col_type + cat_w + 1;
+		constexpr int fixed_tail = 1 + vram_w + 1 + sm_w + 1 + uptime_w + 1 + enc_w + 1 + dec_w;
+		const int detail_w = std::max(10, width - col_work - fixed_tail + 1);
+		const int col_vram = width - (dec_w + 1 + enc_w + 1 + uptime_w + 1 + sm_w + 1 + vram_w) + 1;
+		const int col_sm = col_vram + vram_w + 1;
+		const int col_up = col_sm + sm_w + 1;
+		const int col_enc = col_up + uptime_w + 1;
+		const int col_dec = col_enc + enc_w + 1;
 		const int max_rows = std::max(0, height - 3);
+
+		const auto cell = [&](const int row_y, const int col_x, const string& content) {
+			out += Mv::to(y + row_y, x + col_x);
+			out += content;
+		};
+
+		const auto category_col = [&](const string& category) -> string {
+			if (category.empty()) return ljust("-", cat_w, true);
+			return ljust(uresize('[' + category + ']', cat_w), cat_w, true);
+		};
+
+		const auto pct_cell = [](const int val, const int w) -> string {
+			if (val < 0)
+				return Theme::c("inactive_fg") + rjust("-", w);
+			const string text = to_string(val) + '%';
+			return Theme::g("cpu").at(std::clamp(val, 0, 100)) + Fx::b + rjust(text, w) + Fx::ub;
+		};
 
 		if (redraw) {
 			out += box;
-			out += Mv::to(y + 1, x + 1) + Theme::c("title") + Fx::b
-				+ Theme::c("hi_fg") + ljust("GPU", 4) + Theme::c("title") + ' '
-				+ ljust("Type", cat_w) + ' '
-				+ ljust("Workload", detail_w) + ' '
-				+ rjust("VRAM", 7) + ' '
-				+ rjust("SM%", 4) + ' '
-				+ rjust("Up", uptime_w) + ' '
-				+ rjust("ENC", enc_w) + ' '
-				+ rjust("DEC", dec_w)
-				+ Fx::ub;
+			const string hdr = Theme::c("title") + Fx::b;
+			cell(1, col_gpu, hdr + Theme::c("hi_fg") + ljust("GPU", gpu_w) + Fx::ub);
+			cell(1, col_type, hdr + ljust("Type", cat_w));
+			cell(1, col_work, hdr + ljust("Workload", detail_w));
+			cell(1, col_vram, hdr + rjust("VRAM", vram_w));
+			cell(1, col_sm, hdr + rjust("SM%", sm_w));
+			cell(1, col_up, hdr + rjust("Up", uptime_w));
+			cell(1, col_enc, hdr + rjust("ENC", enc_w));
+			cell(1, col_dec, hdr + rjust("DEC", dec_w) + Fx::ub);
 		}
 
 		std::unordered_map<int, vector<const gpu_proc_entry*>> by_gpu;
@@ -618,50 +646,37 @@ namespace Gpu::Workload {
 
 		int row = 2;
 		for (const auto& line : rows) {
-			out += Mv::to(y + row++, x + 1);
-
-			const auto category_col = [&](const string& category) {
-				return category.empty() ? ljust("-", cat_w) : ljust('[' + category + ']', cat_w);
-			};
-
-			const auto pct_cell = [](const int val, const int w) -> string {
-				if (val < 0)
-					return Theme::c("inactive_fg") + rjust("-", w);
-				const string text = to_string(val) + '%';
-				return Theme::g("cpu").at(std::clamp(val, 0, 100)) + Fx::b + rjust(text, w) + Fx::ub;
-			};
-
 			if (line.idle) {
-				out += Theme::c("hi_fg") + Fx::b
-					+ ljust("GPU" + to_string(line.gpu), 4) + Fx::ub
-					+ Theme::c("inactive_fg") + ' '
-					+ ljust("-", cat_w) + ' '
-					+ ljust(line.detail, detail_w) + ' '
-					+ rjust("-", 7) + ' '
-					+ rjust("-", 4) + ' '
-					+ rjust("-", uptime_w) + ' '
-					+ rjust("-", enc_w) + ' '
-					+ rjust("-", dec_w);
+				cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + ljust("GPU" + to_string(line.gpu), gpu_w) + Fx::ub);
+				cell(row, col_type, Theme::c("inactive_fg") + ljust("-", cat_w, true));
+				cell(row, col_work, Theme::c("inactive_fg") + ljust(line.detail, detail_w, true));
+				cell(row, col_vram, Theme::c("inactive_fg") + rjust("-", vram_w));
+				cell(row, col_sm, Theme::c("inactive_fg") + rjust("-", sm_w));
+				cell(row, col_up, Theme::c("inactive_fg") + rjust("-", uptime_w));
+				cell(row, col_enc, Theme::c("inactive_fg") + rjust("-", enc_w));
+				cell(row, col_dec, Theme::c("inactive_fg") + rjust("-", dec_w));
+				++row;
 				continue;
 			}
 
-			const string gpu_col = line.show_gpu ? ljust("GPU" + to_string(line.gpu), 4) : ljust("", 4);
-			const string detail = uresize(line.detail, detail_w);
+			const string gpu_col = line.show_gpu ? ljust("GPU" + to_string(line.gpu), gpu_w) : ljust("", gpu_w);
+			const string detail = ljust(uresize(line.detail, detail_w), detail_w, true);
 			const string vram = floating_humanizer(line.vram_bytes);
 			const int vram_pct = static_cast<int>(std::clamp(line.vram_bytes * 100 / max_vram, 0LL, 100LL));
 			const string sm = line.sm_util >= 0 ? to_string(line.sm_util) + '%' : "-";
-			const string uptime = uresize(format_runtime(line.runtime_s), uptime_w);
+			const string uptime = rjust(uresize(format_runtime(line.runtime_s), uptime_w), uptime_w);
 
-			out += Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub + ' '
-				+ Theme::c("proc_misc") + Fx::b + category_col(line.category) + Fx::ub + ' '
-				+ Theme::c("title") + Fx::b + ljust(detail, detail_w) + Fx::ub + ' '
-				+ Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, 7) + Fx::ub + ' '
-				+ (line.sm_util >= 0
-					? Theme::g("cpu").at(std::clamp(line.sm_util, 0, 100)) + Fx::b + rjust(sm, 4) + Fx::ub
-					: Theme::c("inactive_fg") + rjust(sm, 4))
-				+ ' ' + Theme::c("title") + rjust(uptime, uptime_w)
-				+ ' ' + pct_cell(line.enc_util, enc_w)
-				+ ' ' + pct_cell(line.dec_util, dec_w);
+			cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub);
+			cell(row, col_type, Theme::c("proc_misc") + Fx::b + category_col(line.category) + Fx::ub);
+			cell(row, col_work, Theme::c("title") + Fx::b + detail + Fx::ub);
+			cell(row, col_vram, Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, vram_w) + Fx::ub);
+			cell(row, col_sm, line.sm_util >= 0
+				? Theme::g("cpu").at(std::clamp(line.sm_util, 0, 100)) + Fx::b + rjust(sm, sm_w) + Fx::ub
+				: Theme::c("inactive_fg") + rjust(sm, sm_w));
+			cell(row, col_up, Theme::c("title") + uptime);
+			cell(row, col_enc, pct_cell(line.enc_util, enc_w));
+			cell(row, col_dec, pct_cell(line.dec_util, dec_w));
+			++row;
 		}
 
 		redraw = false;
