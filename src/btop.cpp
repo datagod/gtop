@@ -1060,10 +1060,10 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	}
 
 #ifdef GPU_SUPPORT
-	// GPU-first layout: GPUs only until user sets gpu_first_layout=false in config
+	// GPU-first layout: CPU on top + all GPUs; hide mem/net/proc until gpu_first_layout=false
 	if (Config::getB("gpu_first_layout")) {
 		if (Gpu::count > 0) {
-			string gpu_boxes;
+			string gpu_boxes = "cpu ";
 			for (int i = 0; i < Gpu::count; ++i)
 				gpu_boxes += fmt::format("gpu{} ", i);
 			if (not gpu_boxes.empty()) gpu_boxes.pop_back();

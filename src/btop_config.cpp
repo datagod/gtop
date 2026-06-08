@@ -242,7 +242,7 @@ namespace Config {
 		{"rsmi_measure_pcie_speeds",
 								"#* Measure PCIe throughput on AMD cards, may impact performance on certain cards."},
 		{"gpu_mirror_graph",	"#* Horizontally mirror the GPU graph."},
-		{"gpu_first_layout",	"#* GPU-first layout: show only GPU boxes (hide mem/disks and proc). Set false to use saved shown_boxes."},
+		{"gpu_first_layout",	"#* GPU-first layout: CPU box on top + all GPUs (hide mem/net/proc). Set false to use saved shown_boxes."},
 		{"show_gpu_workloads",	"#* Show per-GPU workload panel at bottom (models/processes using VRAM)."},
 		{"workload_panel_max_height", "#* Max terminal rows for the GPU workloads panel (8-28)."},
 		{"shown_gpus",			"#* Set which GPU vendors to show. Available values are \"nvidia amd intel apple\""},
