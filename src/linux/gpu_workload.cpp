@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fmt/format.h>
+#include <pwd.h>
 #include <ranges>
 #include <regex>
 #include <sstream>
@@ -323,39 +324,96 @@ namespace Gpu::Workload {
 		return "";
 	}
 
-	string build_detail(
-		const string& label,
-		const string& proc_name,
-		const string& cmd,
-		const string& container
-	) {
-		string line = label;
+	string get_process_user(const unsigned int pid) {
+		const auto status = readfile(fs::path("/proc") / std::to_string(pid) / "status");
+		if (status.empty()) return "";
 
+		for (auto& line : ssplit(status, '\n')) {
+			if (not line.starts_with("Uid:")) continue;
+			const auto parts = ssplit(line);
+			if (parts.size() < 2) return "";
+			try {
+				if (const auto* pw = getpwuid(std::stoul(string(parts[1]))); pw != nullptr)
+					return string(pw->pw_name);
+			} catch (...) {}
+			return string(parts[1]);
+		}
+		return "";
+	}
+
+	string build_subline(const gpu_proc_entry& e) {
 		vector<string> parts;
-		if (not container.empty())
-			parts.push_back("docker:" + container);
+		if (not e.container.empty())
+			parts.push_back("docker:" + e.container);
+		parts.push_back("pid:" + to_string(e.pid));
+		if (not e.user.empty())
+			parts.push_back(e.user);
 
-		const auto proc_base = basename_of(proc_name);
-		if (not proc_base.empty() and proc_base != label and not label.contains(proc_base))
+		const auto proc_base = basename_of(e.process_name);
+		if (not proc_base.empty() and proc_base != e.label)
 			parts.push_back(proc_base);
 
-		const auto ctx = cmd_context(cmd);
-		if (not ctx.empty() and ctx != label and not v_contains(parts, ctx))
+		if (e.ctx_type == 'C' or e.ctx_type == 'G')
+			parts.push_back(string(1, e.ctx_type) + "-ctx");
+
+		const auto ctx = cmd_context(e.cmdline);
+		if (not ctx.empty() and ctx != e.label and not v_contains(parts, ctx))
 			parts.push_back(ctx);
 
-		if (parts.empty() and not cmd.empty() and cmd != proc_name) {
-			auto snippet = cmd;
-			if (snippet.size() > 72)
-				snippet = snippet.substr(0, 69) + "...";
-			if (snippet != label)
+		if (not e.cmdline.empty()) {
+			auto snippet = e.cmdline;
+			if (snippet.size() > 96)
+				snippet = snippet.substr(0, 93) + "...";
+			if (snippet != e.label and not v_contains(parts, snippet))
 				parts.push_back(snippet);
 		}
 
-		for (size_t i = 0; i < parts.size(); ++i) {
-			line += (i == 0 ? " · " : " · ") + parts[i];
+		if (parts.empty()) return "";
+		string line = "▸ ";
+		for (size_t i = 0; i < parts.size(); ++i)
+			line += (i == 0 ? "" : " · ") + parts[i];
+		return line;
+	}
+
+	string gpu_summary_line(const int gpu_idx, const vector<const gpu_proc_entry*>& procs) {
+		const auto& gpus = Gpu::collect(true);
+		if (gpu_idx < 0 or gpu_idx >= static_cast<int>(gpus.size()))
+			return "GPU" + to_string(gpu_idx);
+
+		const auto& g = gpus[gpu_idx];
+		const int sm = g.gpu_percent.contains("gpu-totals") and not g.gpu_percent.at("gpu-totals").empty()
+			? static_cast<int>(g.gpu_percent.at("gpu-totals").back()) : 0;
+		const int mem_pct = not g.mem_utilization_percent.empty()
+			? static_cast<int>(g.mem_utilization_percent.back()) : 0;
+		const int temp = not g.temp.empty() ? static_cast<int>(g.temp.back()) : 0;
+
+		std::unordered_map<string, int> cats;
+		for (const auto* p : procs) {
+			const string cat = p->category.empty() ? "other" : p->category;
+			cats[cat]++;
 		}
 
-		return line;
+		string cat_breakdown;
+		vector<std::pair<string, int>> ordered(cats.begin(), cats.end());
+		std::ranges::sort(ordered, [](const auto& a, const auto& b) { return a.second > b.second; });
+		for (const auto& [cat, n] : ordered) {
+			if (not cat_breakdown.empty()) cat_breakdown += ' ';
+			cat_breakdown += cat + "×" + to_string(n);
+		}
+
+		string summary = fmt::format(
+			"GPU{}  {}/{}  {}%SM  {}%MEM  {}°C  {} procs",
+			gpu_idx,
+			floating_humanizer(g.mem_used),
+			floating_humanizer(g.mem_total),
+			sm,
+			mem_pct,
+			temp,
+			procs.size()
+		);
+		if (not cat_breakdown.empty())
+			summary += "  · " + cat_breakdown;
+		return summary;
 	}
 
 	std::unordered_map<string, int> gpu_uuid_map() {
@@ -379,8 +437,10 @@ namespace Gpu::Workload {
 
 	struct pmon_stats {
 		int sm_util = -1;
+		int mem_util = -1;
 		int enc_util = -1;
 		int dec_util = -1;
+		char ctx_type = 0;
 	};
 
 	int parse_pmon_pct(const string& val) {
@@ -403,8 +463,11 @@ namespace Gpu::Workload {
 
 			pmon_stats stats;
 			stats.sm_util = parse_pmon_pct(sm_s);
+			stats.mem_util = parse_pmon_pct(mem_s);
 			stats.enc_util = parse_pmon_pct(enc_s);
 			stats.dec_util = parse_pmon_pct(dec_s);
+			if (type.size() == 1 and (type[0] == 'C' or type[0] == 'G'))
+				stats.ctx_type = type[0];
 			util[std::stoul(pid_s)] = stats;
 		}
 		return util;
@@ -488,22 +551,27 @@ namespace Gpu::Workload {
 			}
 
 			const auto cmd = get_cmdline(e.pid);
+			e.cmdline = cmd;
 			e.label = infer_label(e.process_name, cmd);
-			const auto container = container_for_pid(e.pid, docker_names);
-			e.category = classify_category(e.process_name, cmd + " " + container);
+			e.container = container_for_pid(e.pid, docker_names);
+			e.user = get_process_user(e.pid);
+			e.category = classify_category(e.process_name, cmd + " " + e.container);
 			if (e.category == "LLM" or e.process_name.contains("llama-server") or e.process_name.contains("vllm")) {
 				if (const auto model = resolve_llm_model(e.process_name, cmd, e.vram_bytes, ollama_running);
 					not model.empty())
 					e.label = model;
 			}
-			e.detail = build_detail(e.label, e.process_name, cmd, container);
+			e.detail = e.label;
 			e.runtime_s = get_process_runtime_s(e.pid);
 			if (pmon.contains(e.pid)) {
 				const auto& stats = pmon.at(e.pid);
 				e.sm_util = stats.sm_util;
+				e.mem_util = stats.mem_util;
 				e.enc_util = stats.enc_util;
 				e.dec_util = stats.dec_util;
+				e.ctx_type = stats.ctx_type;
 			}
+			e.subline = build_subline(e);
 
 			entries.push_back(std::move(e));
 		}
@@ -524,8 +592,21 @@ namespace Gpu::Workload {
 	int reserved_height() {
 		if (not Config::getB("show_gpu_workloads") or Gpu::shown < 1)
 			return 0;
-		const int lines = std::max(Gpu::count, static_cast<int>(entries.size()));
-		return std::clamp(lines + 3, 5, 12);
+
+		std::unordered_map<int, int> per_gpu;
+		for (const auto& e : entries)
+			per_gpu[e.gpu_index]++;
+
+		int data_rows = 0;
+		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
+			if (per_gpu[gpu] == 0)
+				data_rows += 1;
+			else
+				data_rows += 1 + per_gpu[gpu] * 2;
+		}
+
+		const int cap = std::clamp(Config::getI("workload_panel_max_height"), 8, 28);
+		return std::clamp(data_rows + 3, 6, cap);
 	}
 
 	string draw(const bool force_redraw, const bool data_same) {
@@ -539,19 +620,22 @@ namespace Gpu::Workload {
 		constexpr int cat_w = 8;
 		constexpr int vram_w = 7;
 		constexpr int sm_w = 4;
+		constexpr int mem_w = 4;
 		constexpr int uptime_w = 6;
 		constexpr int enc_w = 4;
 		constexpr int dec_w = 4;
 		constexpr int col_gpu = 1;
 		constexpr int col_type = col_gpu + gpu_w + 1;
 		constexpr int col_work = col_type + cat_w + 1;
-		constexpr int fixed_tail = 1 + vram_w + 1 + sm_w + 1 + uptime_w + 1 + enc_w + 1 + dec_w;
+		constexpr int fixed_tail = 1 + vram_w + 1 + sm_w + 1 + mem_w + 1 + uptime_w + 1 + enc_w + 1 + dec_w;
 		const int detail_w = std::max(10, width - col_work - fixed_tail + 1);
-		const int col_vram = width - (dec_w + 1 + enc_w + 1 + uptime_w + 1 + sm_w + 1 + vram_w) + 1;
+		const int col_vram = width - (dec_w + 1 + enc_w + 1 + uptime_w + 1 + mem_w + 1 + sm_w + 1 + vram_w) + 1;
 		const int col_sm = col_vram + vram_w + 1;
-		const int col_up = col_sm + sm_w + 1;
+		const int col_mem = col_sm + sm_w + 1;
+		const int col_up = col_mem + mem_w + 1;
 		const int col_enc = col_up + uptime_w + 1;
 		const int col_dec = col_enc + enc_w + 1;
+		const int subline_w = std::max(10, width - col_work + 1);
 		const int max_rows = std::max(0, height - 3);
 
 		const auto cell = [&](const int row_y, const int col_x, const string& content) {
@@ -579,6 +663,7 @@ namespace Gpu::Workload {
 			cell(1, col_work, hdr + ljust("Workload", detail_w));
 			cell(1, col_vram, hdr + rjust("VRAM", vram_w));
 			cell(1, col_sm, hdr + rjust("SM%", sm_w));
+			cell(1, col_mem, hdr + rjust("MEM", mem_w));
 			cell(1, col_up, hdr + rjust("Up", uptime_w));
 			cell(1, col_enc, hdr + rjust("ENC", enc_w));
 			cell(1, col_dec, hdr + rjust("DEC", dec_w) + Fx::ub);
@@ -588,26 +673,21 @@ namespace Gpu::Workload {
 		for (const auto& e : entries)
 			by_gpu[e.gpu_index].push_back(&e);
 
+		enum class wl_kind { idle, gpu_hdr, proc_main, proc_sub };
+
 		struct wl_row {
+			wl_kind kind = wl_kind::idle;
 			int gpu = -1;
 			bool show_gpu = false;
-			bool idle = false;
-			string category;
-			string detail;
-			long long vram_bytes = 0;
-			int sm_util = -1;
-			int enc_util = -1;
-			int dec_util = -1;
-			int runtime_s = -1;
+			string summary;
+			const gpu_proc_entry* proc = nullptr;
 		};
 		vector<wl_row> rows;
-		rows.reserve(entries.size() + Gpu::count);
-
-		const int per_gpu_max = std::max(1, max_rows / std::max(1, Gpu::count));
+		rows.reserve(entries.size() * 2 + Gpu::count * 2);
 
 		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
-			if (not by_gpu.contains(gpu)) {
-				rows.push_back({.gpu = gpu, .show_gpu = true, .idle = true, .category = "", .detail = "(idle)"});
+			if (not by_gpu.contains(gpu) or by_gpu[gpu].empty()) {
+				rows.push_back({.kind = wl_kind::idle, .gpu = gpu, .show_gpu = true});
 				continue;
 			}
 
@@ -615,22 +695,19 @@ namespace Gpu::Workload {
 			std::ranges::sort(procs, [](const auto* a, const auto* b) {
 				return a->vram_bytes > b->vram_bytes;
 			});
-			if (static_cast<int>(procs.size()) > per_gpu_max)
-				procs.resize(per_gpu_max);
+
+			rows.push_back({
+				.kind = wl_kind::gpu_hdr,
+				.gpu = gpu,
+				.show_gpu = true,
+				.summary = gpu_summary_line(gpu, procs)
+			});
 
 			bool first = true;
 			for (const auto* e : procs) {
-				rows.push_back({
-					.gpu = gpu,
-					.show_gpu = first,
-					.category = e->category,
-					.detail = e->detail,
-					.vram_bytes = e->vram_bytes,
-					.sm_util = e->sm_util,
-					.enc_util = e->enc_util,
-					.dec_util = e->dec_util,
-					.runtime_s = e->runtime_s
-				});
+				rows.push_back({.kind = wl_kind::proc_main, .gpu = gpu, .show_gpu = first, .proc = e});
+				if (not e->subline.empty())
+					rows.push_back({.kind = wl_kind::proc_sub, .gpu = gpu, .proc = e});
 				first = false;
 			}
 		}
@@ -646,36 +723,44 @@ namespace Gpu::Workload {
 
 		int row = 2;
 		for (const auto& line : rows) {
-			if (line.idle) {
+			switch (line.kind) {
+			case wl_kind::idle:
 				cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + ljust("GPU" + to_string(line.gpu), gpu_w) + Fx::ub);
-				cell(row, col_type, Theme::c("inactive_fg") + ljust("-", cat_w, true));
-				cell(row, col_work, Theme::c("inactive_fg") + ljust(line.detail, detail_w, true));
-				cell(row, col_vram, Theme::c("inactive_fg") + rjust("-", vram_w));
-				cell(row, col_sm, Theme::c("inactive_fg") + rjust("-", sm_w));
-				cell(row, col_up, Theme::c("inactive_fg") + rjust("-", uptime_w));
-				cell(row, col_enc, Theme::c("inactive_fg") + rjust("-", enc_w));
-				cell(row, col_dec, Theme::c("inactive_fg") + rjust("-", dec_w));
-				++row;
-				continue;
+				cell(row, col_work, Theme::c("inactive_fg") + ljust("(idle)", detail_w, true));
+				break;
+			case wl_kind::gpu_hdr:
+				cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + ljust("GPU" + to_string(line.gpu), gpu_w) + Fx::ub);
+				cell(row, col_work, Theme::c("proc_misc") + Fx::b
+					+ ljust(uresize(line.summary, subline_w), subline_w, true) + Fx::ub);
+				break;
+			case wl_kind::proc_main: {
+				const auto& e = *line.proc;
+				const string gpu_col = line.show_gpu ? ljust("GPU" + to_string(line.gpu), gpu_w) : ljust("", gpu_w);
+				const string label = ljust(uresize(e.label, detail_w), detail_w, true);
+				const string vram = floating_humanizer(e.vram_bytes);
+				const int vram_pct = static_cast<int>(std::clamp(e.vram_bytes * 100 / max_vram, 0LL, 100LL));
+				const string sm = e.sm_util >= 0 ? to_string(e.sm_util) + '%' : "-";
+				const string uptime = rjust(uresize(format_runtime(e.runtime_s), uptime_w), uptime_w);
+
+				cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub);
+				cell(row, col_type, Theme::c("proc_misc") + Fx::b + category_col(e.category) + Fx::ub);
+				cell(row, col_work, Theme::c("title") + Fx::b + label + Fx::ub);
+				cell(row, col_vram, Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, vram_w) + Fx::ub);
+				cell(row, col_sm, e.sm_util >= 0
+					? Theme::g("cpu").at(std::clamp(e.sm_util, 0, 100)) + Fx::b + rjust(sm, sm_w) + Fx::ub
+					: Theme::c("inactive_fg") + rjust(sm, sm_w));
+				cell(row, col_mem, pct_cell(e.mem_util, mem_w));
+				cell(row, col_up, Theme::c("title") + uptime);
+				cell(row, col_enc, pct_cell(e.enc_util, enc_w));
+				cell(row, col_dec, pct_cell(e.dec_util, dec_w));
+				break;
 			}
-
-			const string gpu_col = line.show_gpu ? ljust("GPU" + to_string(line.gpu), gpu_w) : ljust("", gpu_w);
-			const string detail = ljust(uresize(line.detail, detail_w), detail_w, true);
-			const string vram = floating_humanizer(line.vram_bytes);
-			const int vram_pct = static_cast<int>(std::clamp(line.vram_bytes * 100 / max_vram, 0LL, 100LL));
-			const string sm = line.sm_util >= 0 ? to_string(line.sm_util) + '%' : "-";
-			const string uptime = rjust(uresize(format_runtime(line.runtime_s), uptime_w), uptime_w);
-
-			cell(row, col_gpu, Theme::c("hi_fg") + Fx::b + gpu_col + Fx::ub);
-			cell(row, col_type, Theme::c("proc_misc") + Fx::b + category_col(line.category) + Fx::ub);
-			cell(row, col_work, Theme::c("title") + Fx::b + detail + Fx::ub);
-			cell(row, col_vram, Theme::g("used").at(vram_pct) + Fx::b + rjust(vram, vram_w) + Fx::ub);
-			cell(row, col_sm, line.sm_util >= 0
-				? Theme::g("cpu").at(std::clamp(line.sm_util, 0, 100)) + Fx::b + rjust(sm, sm_w) + Fx::ub
-				: Theme::c("inactive_fg") + rjust(sm, sm_w));
-			cell(row, col_up, Theme::c("title") + uptime);
-			cell(row, col_enc, pct_cell(line.enc_util, enc_w));
-			cell(row, col_dec, pct_cell(line.dec_util, dec_w));
+			case wl_kind::proc_sub:
+				if (line.proc != nullptr and not line.proc->subline.empty())
+					cell(row, col_work, Theme::c("inactive_fg")
+						+ ljust(uresize(line.proc->subline, subline_w), subline_w, true));
+				break;
+			}
 			++row;
 		}
 
