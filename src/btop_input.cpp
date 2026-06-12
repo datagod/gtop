@@ -87,6 +87,7 @@ namespace Input {
 	array<int, 2> mouse_pos;
 	std::unordered_map<string, Mouse_loc> mouse_mappings;
 	bool dragging_scroll;
+	bool dragging_wl_scroll;
 
 	deque<string> history(50, "");
 	string old_filter;
@@ -287,6 +288,7 @@ namespace Input {
 					return;
 				} else if (key == "mouse_release") {
 					dragging_scroll = false;
+					dragging_wl_scroll = false;
 				} else
 					keep_going = true;
 
@@ -534,6 +536,65 @@ namespace Input {
 					return;
 				}
 			}
+
+		#ifdef GPU_SUPPORT
+			//? Input actions for GPU workload panel
+			if (Gpu::Workload::shown) {
+				bool keep_going = false;
+				const auto& [wl_col, wl_line] = mouse_pos;
+				const auto in_wl_box = [&] {
+					return wl_col >= Gpu::Workload::x + 1
+						and wl_col < Gpu::Workload::x + Gpu::Workload::width
+						and wl_line >= Gpu::Workload::y + 1
+						and wl_line < Gpu::Workload::y + Gpu::Workload::height - 1;
+				};
+
+				if (key.starts_with("mouse_")) {
+					if (key == "mouse_click" and in_wl_box()) {
+						if (wl_col >= Gpu::Workload::x + Gpu::Workload::width - 2) {
+							if (wl_line == Gpu::Workload::y + 1) {
+								if (Gpu::Workload::scroll("page_up") == -1) return;
+							}
+							else if (wl_line == Gpu::Workload::y + Gpu::Workload::height - 2) {
+								if (Gpu::Workload::scroll("page_down") == -1) return;
+							}
+							else if (wl_line == Gpu::Workload::y + 2 + Gpu::Workload::scroll_pos) {
+								dragging_wl_scroll = true;
+								return;
+							}
+							else if (Gpu::Workload::scroll("mousey" + to_string(wl_line - Gpu::Workload::y - 2)) == -1)
+								return;
+						}
+					}
+					else if (key.starts_with("mouse_scroll_") and in_wl_box()) {
+						if (Gpu::Workload::scroll(key) == -1) return;
+					}
+					else if (key == "mouse_drag" and dragging_wl_scroll) {
+						if (Gpu::Workload::scroll("mousey" + to_string(wl_line - Gpu::Workload::y - 2)) == -1)
+							return;
+					}
+					else
+						keep_going = true;
+				}
+				else if (
+					is_in(key, "up", "down", "page_up", "page_down", "home", "end")
+					or (vim_keys and is_in(key, "j", "k", "g", "G"))
+				) {
+					if (in_wl_box() or not Proc::shown) {
+						if (Gpu::Workload::scroll(key) == -1) return;
+					}
+					else
+						keep_going = true;
+				}
+				else
+					keep_going = true;
+
+				if (not keep_going) {
+					Runner::run("gpu0", true, true);
+					return;
+				}
+			}
+		#endif
 
 			//? Input actions for cpu box
 			if (Cpu::shown) {

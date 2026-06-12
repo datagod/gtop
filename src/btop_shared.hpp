@@ -205,10 +205,12 @@ namespace Gpu {
 		extern bool shown, redraw;
 		extern string box;
 		extern vector<gpu_proc_entry> entries;
+		extern int scroll_offset, scroll_pos, total_rows;
 
 		void collect(bool no_update = false);
 		string draw(bool force_redraw = false, bool data_same = false);
 		int reserved_height();
+		int scroll(const std::string_view cmd_key);
 	}
 
 	namespace Nvml {

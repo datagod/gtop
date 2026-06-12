@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fmt/format.h>
@@ -22,6 +23,10 @@
 
 namespace fs = std::filesystem;
 
+using std::clamp;
+using std::max;
+using std::min;
+using std::round;
 using std::string;
 using std::vector;
 using namespace Tools;
@@ -35,6 +40,9 @@ namespace Gpu::Workload {
 	string box;
 	vector<gpu_proc_entry> entries;
 	int last_reserved = 0;
+	int scroll_offset = 0;
+	int scroll_pos = 0;
+	int total_rows = 0;
 
 	namespace {
 
@@ -546,45 +554,182 @@ namespace Gpu::Workload {
 		const gpu_proc_entry* proc = nullptr;
 	};
 
-	vector<wl_row> build_rows(const int subline_w) {
+	size_t proc_row_cost(const gpu_proc_entry* e, const int subline_w, const bool include_sub) {
+		size_t cost = 1;
+		if (include_sub and not e->subline.empty())
+			cost += wrap_text(e->subline, subline_w).size();
+		return cost;
+	}
+
+	void append_proc_rows(
+		vector<wl_row>& rows,
+		const int gpu,
+		const vector<const gpu_proc_entry*>& procs,
+		const int subline_w,
+		const size_t max_procs,
+		const bool include_sub,
+		bool& first
+	) {
+		for (size_t i = 0; i < procs.size() and i < max_procs; ++i) {
+			const auto* e = procs[i];
+			rows.push_back({.kind = wl_kind::proc_main, .gpu = gpu, .show_gpu = first, .text = "", .proc = e});
+			if (include_sub and not e->subline.empty()) {
+				const auto wrapped = wrap_text(e->subline, subline_w);
+				for (size_t j = 0; j < wrapped.size(); ++j) {
+					string wline = wrapped[j];
+					if (j > 0) {
+						if (wline.starts_with("▸ "))
+							wline = wline.substr(2);
+						wline = "  " + wline;
+					}
+					rows.push_back({.kind = wl_kind::proc_sub, .gpu = gpu, .text = std::move(wline), .proc = e});
+				}
+			}
+			first = false;
+		}
+	}
+
+	vector<wl_row> build_gpu_section(
+		const int gpu,
+		const vector<const gpu_proc_entry*>& procs,
+		const int subline_w,
+		const size_t row_budget,
+		const bool include_sub
+	) {
+		vector<wl_row> rows;
+		if (procs.empty()) {
+			rows.push_back({.kind = wl_kind::idle, .gpu = gpu, .show_gpu = true, .text = "(idle)"});
+			return rows;
+		}
+
+		const auto summary_lines = wrap_text(gpu_summary_line(gpu, procs), subline_w);
+		size_t used = summary_lines.size();
+		if (used > row_budget)
+			used = 1;
+
+		for (size_t i = 0; i < summary_lines.size() and i < used; ++i)
+			rows.push_back({.kind = wl_kind::gpu_hdr, .gpu = gpu, .show_gpu = i == 0, .text = summary_lines[i]});
+
+		bool use_sub = include_sub;
+		size_t max_procs = 0;
+		for (size_t i = 0; i < procs.size(); ++i) {
+			const size_t cost = proc_row_cost(procs[i], subline_w, use_sub);
+			if (used + cost > row_budget)
+				break;
+			++max_procs;
+			used += cost;
+		}
+
+		if (max_procs == 0 and not procs.empty() and used < row_budget) {
+			use_sub = false;
+			for (size_t i = 0; i < procs.size(); ++i) {
+				const size_t cost = proc_row_cost(procs[i], subline_w, false);
+				if (used + cost > row_budget)
+					break;
+				++max_procs;
+				used += cost;
+			}
+		}
+
+		bool first = true;
+		append_proc_rows(rows, gpu, procs, subline_w, max_procs, use_sub, first);
+
+		if (max_procs < procs.size()) {
+			const auto hidden = procs.size() - max_procs;
+			rows.push_back({
+				.kind = wl_kind::proc_sub,
+				.gpu = gpu,
+				.text = fmt::format("(+{} more)", hidden)
+			});
+		}
+		return rows;
+	}
+
+	size_t section_full_height(
+		const vector<const gpu_proc_entry*>& procs,
+		const int gpu,
+		const int subline_w,
+		const bool include_sub
+	) {
+		if (procs.empty()) return 1;
+		size_t rows = wrap_text(gpu_summary_line(gpu, procs), subline_w).size();
+		for (const auto* e : procs)
+			rows += proc_row_cost(e, subline_w, include_sub);
+		return rows;
+	}
+
+	vector<wl_row> build_rows(const int subline_w, const int row_budget = -1) {
 		std::unordered_map<int, vector<const gpu_proc_entry*>> by_gpu;
 		for (const auto& e : entries)
 			by_gpu[e.gpu_index].push_back(&e);
 
+		vector<vector<const gpu_proc_entry*>> gpu_procs(Gpu::count);
+		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
+			if (not by_gpu.contains(gpu)) continue;
+			gpu_procs[gpu] = by_gpu[gpu];
+			std::ranges::sort(gpu_procs[gpu], [](const auto* a, const auto* b) {
+				return a->vram_bytes > b->vram_bytes;
+			});
+		}
+
+		const size_t budget = row_budget < 0 ? SIZE_MAX : static_cast<size_t>(row_budget);
+		size_t total_full = 0;
+		for (int gpu = 0; gpu < Gpu::count; ++gpu)
+			total_full += section_full_height(gpu_procs[gpu], gpu, subline_w, true);
+
 		vector<wl_row> rows;
 		rows.reserve(entries.size() * 3 + Gpu::count * 2);
 
+		if (total_full <= budget) {
+			for (int gpu = 0; gpu < Gpu::count; ++gpu) {
+				auto section = build_gpu_section(gpu, gpu_procs[gpu], subline_w, SIZE_MAX, true);
+				rows.insert(rows.end(), section.begin(), section.end());
+			}
+			return rows;
+		}
+
+		vector<size_t> gpu_budget(Gpu::count, 0);
+		size_t remaining = budget;
+
 		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
-			if (not by_gpu.contains(gpu) or by_gpu[gpu].empty()) {
-				rows.push_back({.kind = wl_kind::idle, .gpu = gpu, .show_gpu = true, .text = "(idle)"});
-				continue;
+			const auto& procs = gpu_procs[gpu];
+			if (procs.empty()) {
+				gpu_budget[gpu] = std::min(remaining, size_t{1});
+			} else {
+				const auto summary_rows = wrap_text(gpu_summary_line(gpu, procs), subline_w).size();
+				const size_t minimum = summary_rows + 1;
+				gpu_budget[gpu] = std::min(remaining, minimum);
 			}
+			remaining -= gpu_budget[gpu];
+		}
 
-			auto& procs = by_gpu[gpu];
-			std::ranges::sort(procs, [](const auto* a, const auto* b) {
-				return a->vram_bytes > b->vram_bytes;
-			});
+		vector<int> active_gpus;
+		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
+			if (not gpu_procs[gpu].empty())
+				active_gpus.push_back(gpu);
+		}
 
-			for (const auto& summary_line : wrap_text(gpu_summary_line(gpu, procs), subline_w))
-				rows.push_back({.kind = wl_kind::gpu_hdr, .gpu = gpu, .show_gpu = true, .text = summary_line});
-
-			bool first = true;
-			for (const auto* e : procs) {
-				rows.push_back({.kind = wl_kind::proc_main, .gpu = gpu, .show_gpu = first, .proc = e});
-				if (not e->subline.empty()) {
-					const auto wrapped = wrap_text(e->subline, subline_w);
-					for (size_t i = 0; i < wrapped.size(); ++i) {
-						string wline = wrapped[i];
-						if (i > 0) {
-							if (wline.starts_with("▸ "))
-								wline = wline.substr(2);
-							wline = "  " + wline;
-						}
-						rows.push_back({.kind = wl_kind::proc_sub, .gpu = gpu, .text = std::move(wline), .proc = e});
-					}
+		while (remaining > 0 and not active_gpus.empty()) {
+			bool allocated = false;
+			for (auto it = active_gpus.begin(); it != active_gpus.end();) {
+				if (remaining == 0) break;
+				const int gpu = *it;
+				const size_t full = section_full_height(gpu_procs[gpu], gpu, subline_w, true);
+				if (gpu_budget[gpu] >= full) {
+					it = active_gpus.erase(it);
+					continue;
 				}
-				first = false;
+				++gpu_budget[gpu];
+				--remaining;
+				allocated = true;
+				++it;
 			}
+			if (not allocated) break;
+		}
+
+		for (int gpu = 0; gpu < Gpu::count; ++gpu) {
+			auto section = build_gpu_section(gpu, gpu_procs[gpu], subline_w, gpu_budget[gpu], true);
+			rows.insert(rows.end(), section.begin(), section.end());
 		}
 		return rows;
 	}
@@ -630,6 +775,20 @@ namespace Gpu::Workload {
 			last_sublines.push_back(e.subline);
 		}
 		return changed;
+	}
+
+	void update_total_rows() {
+		const int panel_w = width > 0 ? width : 80;
+		total_rows = static_cast<int>(build_rows(work_subline_width(panel_w), -1).size());
+	}
+
+	void clamp_scroll() {
+		const int visible_rows = std::max(0, height - 3);
+		const int max_offset = std::max(0, total_rows - visible_rows);
+		if (scroll_offset > max_offset) {
+			scroll_offset = max_offset;
+			redraw = true;
+		}
 	}
 
 	} // namespace
@@ -705,7 +864,10 @@ namespace Gpu::Workload {
 			return a.gpu_index != b.gpu_index ? a.gpu_index < b.gpu_index : a.vram_bytes > b.vram_bytes;
 		});
 
-		const int need = reserved_height();
+		update_total_rows();
+		clamp_scroll();
+
+		const int need = Gpu::Workload::height > 0 ? Gpu::Workload::height : reserved_height();
 		if (need != last_reserved) {
 			last_reserved = need;
 			Global::resized = true;
@@ -719,10 +881,56 @@ namespace Gpu::Workload {
 		if (not Config::getB("show_gpu_workloads") or Gpu::shown < 1)
 			return 0;
 
-		const int panel_w = width > 0 ? width : 80;
-		const int data_rows = static_cast<int>(build_rows(work_subline_width(panel_w)).size());
-		const int cap = std::clamp(Config::getI("workload_panel_max_height"), 8, 28);
-		return std::clamp(data_rows + 3, 6, cap);
+		return std::clamp(Config::getI("workload_panel_max_height"), 8, 80);
+	}
+
+	int scroll(const std::string_view cmd_key) {
+		const int visible_rows = std::max(0, height - 3);
+		const int max_offset = std::max(0, total_rows - visible_rows);
+		if (max_offset <= 0) return -1;
+
+		const int old_offset = scroll_offset;
+		const auto vim_keys = Config::getB("vim_keys");
+
+		if (cmd_key == "up" or (vim_keys and cmd_key == "k")) {
+			scroll_offset = max(0, scroll_offset - 1);
+		}
+		else if (cmd_key == "mouse_scroll_up") {
+			scroll_offset = max(0, scroll_offset - 3);
+		}
+		else if (cmd_key == "down" or (vim_keys and cmd_key == "j")) {
+			scroll_offset = min(max_offset, scroll_offset + 1);
+		}
+		else if (cmd_key == "mouse_scroll_down") {
+			scroll_offset = min(max_offset, scroll_offset + 3);
+		}
+		else if (cmd_key == "page_up") {
+			scroll_offset = max(0, scroll_offset - visible_rows);
+		}
+		else if (cmd_key == "page_down") {
+			scroll_offset = min(max_offset, scroll_offset + visible_rows);
+		}
+		else if (cmd_key == "home" or (vim_keys and cmd_key == "g")) {
+			scroll_offset = 0;
+		}
+		else if (cmd_key == "end" or (vim_keys and cmd_key == "G")) {
+			scroll_offset = max_offset;
+		}
+		else if (cmd_key.starts_with("mousey")) {
+			const int mouse_y = std::atoi(cmd_key.substr(6).data());
+			const int track = max(1, visible_rows - 2);
+			scroll_offset = clamp(
+				static_cast<int>(round(static_cast<double>(mouse_y) * max_offset / track)),
+				0,
+				max_offset
+			);
+		}
+		else
+			return -1;
+
+		if (scroll_offset == old_offset) return -1;
+		redraw = true;
+		return 0;
 	}
 
 	string draw(const bool force_redraw, const bool data_same) {
@@ -791,9 +999,14 @@ namespace Gpu::Workload {
 			cell(1, col_dec, hdr + rjust("DEC", dec_w) + Fx::ub);
 		}
 
-		auto rows = build_rows(subline_w);
-		if (rows.size() > static_cast<size_t>(max_rows))
-			rows.resize(max_rows);
+		auto rows = build_rows(subline_w, -1);
+		total_rows = static_cast<int>(rows.size());
+		clamp_scroll();
+
+		if (static_cast<int>(rows.size()) > max_rows) {
+			const int end = min(static_cast<int>(rows.size()), scroll_offset + max_rows);
+			rows = vector<wl_row>(rows.begin() + scroll_offset, rows.begin() + end);
+		}
 
 		(void)data_same;
 
@@ -849,6 +1062,28 @@ namespace Gpu::Workload {
 		while (row <= height - 2)
 			clear_row(row++);
 
+		const int visible_rows = std::max(0, height - 3);
+		const int max_offset = std::max(0, total_rows - visible_rows);
+		if (total_rows > visible_rows) {
+			const int track = max(0, height - 5);
+			scroll_pos = track > 0
+				? clamp(static_cast<int>(round(static_cast<double>(scroll_offset) * track / max_offset)), 0, track)
+				: 0;
+			out += Mv::to(y + 1, x + width - 2) + Fx::b + Theme::c("main_fg") + Symbols::up
+				+ Mv::to(y + height - 2, x + width - 2) + Symbols::down;
+			for (int i = y + 2; i < y + height - 2; ++i)
+				out += Mv::to(i, x + width - 2) + ((i == y + 2 + scroll_pos) ? "█" : " ");
+		}
+
+		if (total_rows > 0) {
+			const string location = to_string(scroll_offset + 1) + '/' + to_string(total_rows);
+			const string loc_clear = Symbols::h_line * max(static_cast<size_t>(0), 9 - location.size());
+			out += Mv::to(y + height - 1, x + width - 3 - max(9, static_cast<int>(location.size())))
+				+ Fx::ub + Theme::c("workload_box") + loc_clear + Symbols::title_left_down
+				+ Theme::c("title") + Fx::b + location + Fx::ub
+				+ Theme::c("workload_box") + Symbols::title_right_down;
+		}
+
 		redraw = false;
 		return out + Fx::reset;
 	}
@@ -862,10 +1097,14 @@ namespace Gpu::Workload {
 	bool shown = false, redraw = true;
 	string box;
 	vector<gpu_proc_entry> entries;
+	int scroll_offset = 0;
+	int scroll_pos = 0;
+	int total_rows = 0;
 
 	void collect(const bool) {}
 	string draw(const bool, const bool) { return ""; }
 	int reserved_height() { return 0; }
+	int scroll(const std::string_view) { return -1; }
 }
 
 #endif

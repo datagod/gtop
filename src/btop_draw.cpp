@@ -2262,19 +2262,32 @@ namespace Draw {
 
 		Gpu::Workload::box.clear();
 		Gpu::Workload::shown = Config::getB("show_gpu_workloads") and Gpu::shown > 0;
-		const int wl_reserve = Gpu::Workload::shown ? Gpu::Workload::reserved_height() : 0;
-
-		// Calculate the minimum possible GPU height, store in total_height
-		// The actual total_height value will of course be overwritten later
-		Gpu::total_height = 0;
-		for (int i = 0; i < Gpu::shown; i++) {
-			using namespace Gpu;
-			total_height += 4 + gpu_b_height_offsets[shown_panels[i]];
-		}
+		int wl_reserve = Gpu::Workload::shown ? Gpu::Workload::reserved_height() : 0;
 	#endif
 		Mem::shown = boxes.contains("mem");
 		Net::shown = boxes.contains("net");
 		Proc::shown = boxes.contains("proc");
+
+	#ifdef GPU_SUPPORT
+		vector<int> gpu_stack_heights;
+		const bool gpu_compact_stack = Gpu::shown > 0 and Cpu::shown
+			and not (Mem::shown or Net::shown or Proc::shown);
+		const bool dynamic_wl_height = gpu_compact_stack and Gpu::Workload::shown;
+
+		Gpu::total_height = 0;
+		if (gpu_compact_stack) {
+			for (int i = 0; i < Gpu::shown; ++i)
+				gpu_stack_heights.push_back(
+					max(Gpu::min_height, Gpu::gpu_b_height_offsets[Gpu::shown_panels[i]] + 4)
+				);
+			for (const int h : gpu_stack_heights)
+				Gpu::total_height += h;
+		}
+		else {
+			for (int i = 0; i < Gpu::shown; ++i)
+				Gpu::total_height += 4 + Gpu::gpu_b_height_offsets[Gpu::shown_panels[i]];
+		}
+	#endif
 
 		//* Calculate and draw cpu box outlines
 		if (Cpu::shown) {
@@ -2289,12 +2302,22 @@ namespace Draw {
             const bool show_temp = (Config::getB("check_temp") and got_sensors);
 			width = round((double)Term::width * width_p / 100);
 		#ifdef GPU_SUPPORT
-			if (Gpu::shown != 0 and not (Mem::shown or Net::shown or Proc::shown)) {
+			if (dynamic_wl_height) {
+				height = max(
+					Cpu::min_height,
+					(int)ceil((double)Shared::coreCount / 2) + 4 + gpus_extra_height
+				);
+			}
+			else if (gpu_compact_stack) {
+				height = Term::height - Gpu::total_height - gpus_extra_height - wl_reserve;
+			}
+			else if (Gpu::shown != 0 and not (Mem::shown or Net::shown or Proc::shown)) {
 				height = Term::height - Gpu::total_height - gpus_extra_height - wl_reserve;
 			} else {
 				height = max(8, (int)ceil((double)Term::height * (trim(boxes) == "cpu" ? 100 : height_p/(Gpu::shown+1) + (Gpu::shown != 0)*5) / 100));
 			}
-			if (height <= Term::height-gpus_extra_height) height += gpus_extra_height;
+			if (not dynamic_wl_height and not gpu_compact_stack and height <= Term::height - gpus_extra_height)
+				height += gpus_extra_height;
 		#else
 			height = max(8, (int)ceil((double)Term::height * (trim(boxes) == "cpu" ? 100 : height_p) / 100));
 		#endif
@@ -2326,6 +2349,8 @@ namespace Draw {
 		#ifdef GPU_SUPPORT
 			//gpus_extra_height = max(0, gpus_extra_height - 1);
 			b_height = min(height - 2, (int)ceil((double)Shared::coreCount / b_columns) + 4 + gpus_extra_height);
+			if (dynamic_wl_height)
+				height = max(Cpu::min_height, b_height + 2);
 		#else
 			b_height = min(height - 2, (int)ceil((double)Shared::coreCount / b_columns) + 4);
 		#endif
@@ -2369,7 +2394,9 @@ namespace Draw {
 				redraw[i] = true;
 				int height = 0;
 				width = Term::width;
-				if (Cpu::shown)
+				if (gpu_compact_stack)
+					height = gpu_stack_heights[i];
+				else if (Cpu::shown)
 					if (not (Mem::shown or Net::shown or Proc::shown))
 						height = min_height;
 					else height = Cpu::height;
@@ -2380,9 +2407,14 @@ namespace Draw {
 						height = max(min_height, (int)ceil((double)Term::height * height_p/Gpu::shown / 100));
 
 				b_height_vec[i] = gpu_b_height_offsets[shown_panels[i]] + 2;
-				height += (height+Cpu::height == Term::height-wl_reserve-1);
-				height = max(height, b_height_vec[i] + 2);
-				x_vec[i] = 1; y_vec[i] = 1 + total_height + (not Config::getB("cpu_bottom"))*Cpu::shown*Cpu::height;
+				if (not gpu_compact_stack) {
+					height += (height+Cpu::height == Term::height-wl_reserve-1);
+					height = max(height, b_height_vec[i] + 2);
+				}
+				if (dynamic_wl_height)
+					y_vec[i] = Cpu::y + Cpu::height + total_height;
+				else
+					y_vec[i] = 1 + total_height + (not Config::getB("cpu_bottom"))*Cpu::shown*Cpu::height;
 				box[i] = createBox(x_vec[i], y_vec[i], width, height, Theme::c("cpu_box"), true, std::string("gpu") + (char)(shown_panels[i]+'0'), "", (shown_panels[i]+5)%10); // TODO gpu_box
 				b_width = clamp(width/2, min_width, 65);
 				total_height += height;
@@ -2397,6 +2429,9 @@ namespace Draw {
 				box[i] += createBox(b_x_vec[i], b_y_vec[i], b_width, b_height_vec[i], "", false, name.substr(0, b_width-5));
 				b_height_vec[i] = height - 2;
 			}
+
+			if (dynamic_wl_height)
+				wl_reserve = max(0, Term::height - Cpu::height - total_height);
 
 			if (Gpu::Workload::shown and wl_reserve > 0) {
 				Gpu::Workload::width = Term::width;

@@ -244,7 +244,7 @@ namespace Config {
 		{"gpu_mirror_graph",	"#* Horizontally mirror the GPU graph."},
 		{"gpu_first_layout",	"#* GPU-first layout: CPU box on top + all GPUs (hide mem/net/proc). Set false to use saved shown_boxes."},
 		{"show_gpu_workloads",	"#* Show per-GPU workload panel at bottom (models/processes using VRAM)."},
-		{"workload_panel_max_height", "#* Max terminal rows for the GPU workloads panel (8-28)."},
+		{"workload_panel_max_height", "#* Minimum terminal rows for the GPU workloads panel (8-80); in CPU+GPU layout the panel grows to fill remaining space."},
 		{"shown_gpus",			"#* Set which GPU vendors to show. Available values are \"nvidia amd intel apple\""},
 		{"custom_gpu_name0",	"#* Custom gpu0 model name, empty string to disable."},
 		{"custom_gpu_name1",	"#* Custom gpu1 model name, empty string to disable."},
@@ -383,7 +383,7 @@ namespace Config {
 		{"proc_last_selected", 0},
 		{"proc_followed", 0},
 	#ifdef GPU_SUPPORT
-		{"workload_panel_max_height", 20},
+		{"workload_panel_max_height", 28},
 	#endif
 	};
 	std::unordered_map<std::string_view, int> intsTmp;
